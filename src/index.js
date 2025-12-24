@@ -6,6 +6,9 @@
 // Default threshold: $1.5 billion (represented in millions)
 const DEFAULT_THRESHOLD_MILLIONS = 1500;
 
+// Conversion constant
+const BILLION_IN_MILLIONS = 1000;
+
 export default {
 	/**
 	 * HTTP handler - for testing purposes
@@ -77,6 +80,19 @@ export default {
 };
 
 /**
+ * Format jackpot amount for display
+ * @param {number} amountInMillions - Jackpot amount in millions
+ * @returns {string} Formatted display string (e.g., "$1.70 Billion" or "$500 Million")
+ */
+function formatJackpotDisplay(amountInMillions) {
+	if (amountInMillions >= BILLION_IN_MILLIONS) {
+		const billions = amountInMillions / BILLION_IN_MILLIONS;
+		return `$${billions.toFixed(2)} Billion`;
+	}
+	return `$${amountInMillions.toFixed(0)} Million`;
+}
+
+/**
  * Check lottery results against threshold and annotate with threshold status
  * @param {object} megaMillions - Mega Millions result object
  * @param {object} powerball - Powerball result object
@@ -99,11 +115,6 @@ function checkThresholds(megaMillions, powerball, env) {
 	if (megaExceeds) exceedingLotteries.push('Mega Millions');
 	if (powerballExceeds) exceedingLotteries.push('Powerball');
 
-	// Format threshold for display
-	const thresholdDisplay = thresholdMillions >= 1000
-		? `$${(thresholdMillions / 1000).toFixed(2)} Billion`
-		: `$${thresholdMillions.toFixed(0)} Million`;
-
 	return {
 		megaMillions: {
 			...megaMillions,
@@ -115,7 +126,7 @@ function checkThresholds(megaMillions, powerball, env) {
 		},
 		threshold: {
 			amount: thresholdMillions,
-			display: thresholdDisplay,
+			display: formatJackpotDisplay(thresholdMillions),
 			exceeded: exceedingLotteries.length > 0,
 			exceedingLotteries
 		}
@@ -145,17 +156,8 @@ async function checkMegaMillions() {
 
 		// Convert to millions and format
 		const jackpotInMillions = nextPrizePool / 1000000;
-		let jackpot;
-		let jackpotAmount;
-
-		if (jackpotInMillions >= 1000) {
-			const billions = jackpotInMillions / 1000;
-			jackpot = `$${billions.toFixed(2)} Billion`;
-			jackpotAmount = jackpotInMillions;
-		} else {
-			jackpot = `$${jackpotInMillions.toFixed(0)} Million`;
-			jackpotAmount = jackpotInMillions;
-		}
+		const jackpot = formatJackpotDisplay(jackpotInMillions);
+		const jackpotAmount = jackpotInMillions;
 
 		// Format drawing date
 		const nextDrawing = nextDrawingDate.toLocaleDateString('en-US', {
