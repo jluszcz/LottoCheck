@@ -1,0 +1,8 @@
+name = "lottocheck"
+main = "src/index.js"
+compatibility_date = "2024-12-01"
+compatibility_flags = ["nodejs_compat"]
+
+[triggers]
+# Runs daily at 8pm UTC (3pm EST / 4pm EDT)
+crons = ["0 20 * * *"]
