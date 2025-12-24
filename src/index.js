@@ -85,13 +85,14 @@ export default {
  */
 function checkThresholds(megaMillions, powerball, env) {
 	// Get threshold from environment or use default
-	const thresholdMillions = env?.JACKPOT_THRESHOLD
-		? parseFloat(env.JACKPOT_THRESHOLD)
+	const parsed = parseFloat(env?.JACKPOT_THRESHOLD);
+	const thresholdMillions = !isNaN(parsed) && parsed > 0
+		? parsed
 		: DEFAULT_THRESHOLD_MILLIONS;
 
-	// Check each lottery against threshold
-	const megaExceeds = megaMillions.jackpotAmount >= thresholdMillions;
-	const powerballExceeds = powerball.jackpotAmount >= thresholdMillions;
+	// Check each lottery against threshold (only if no error)
+	const megaExceeds = !megaMillions.error && megaMillions.jackpotAmount >= thresholdMillions;
+	const powerballExceeds = !powerball.error && powerball.jackpotAmount >= thresholdMillions;
 
 	// Build list of lotteries that exceed threshold
 	const exceedingLotteries = [];

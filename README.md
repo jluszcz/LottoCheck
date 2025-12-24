@@ -6,6 +6,7 @@ A CloudFlare Worker that monitors Mega Millions and Powerball jackpots daily and
 
 - **Automated Daily Checks**: Runs automatically at 3pm ET every day
 - **Dual Lottery Support**: Monitors both Mega Millions and Powerball
+- **Configurable Threshold**: Set your own jackpot threshold (defaults to $1.5 billion)
 - **Real-time Data**: Scrapes official lottery websites for current jackpot amounts
 - **HTTP API**: Test endpoint for manual checks during development
 - **Zero Cost**: Runs on CloudFlare's free tier
@@ -59,15 +60,23 @@ Visit `http://localhost:8787` to see current jackpot data in JSON format:
   "timestamp": "2025-12-24T12:13:06.388Z",
   "megaMillions": {
     "lottery": "Mega Millions",
-    "jackpot": "$5 million",
-    "jackpotAmount": 5,
-    "nextDrawing": "..."
+    "jackpot": "$125 Million",
+    "jackpotAmount": 125,
+    "nextDrawing": "Fri, Dec 26, 2025",
+    "exceedsThreshold": false
   },
   "powerball": {
     "lottery": "Powerball",
     "jackpot": "$1.70 Billion",
     "jackpotAmount": 1700,
-    "nextDrawing": "Mon, Dec 22, 2025"
+    "nextDrawing": "Mon, Dec 22, 2025",
+    "exceedsThreshold": true
+  },
+  "threshold": {
+    "amount": 1500,
+    "display": "$1.50 Billion",
+    "exceeded": true,
+    "exceedingLotteries": ["Powerball"]
   }
 }
 ```
@@ -100,6 +109,22 @@ crons = ["0 20 * * *"]  # 8pm UTC = 3pm EST / 4pm EDT
 
 Modify this cron expression to change the check frequency.
 
+### Jackpot Threshold
+
+The threshold is configured in `wrangler.toml`:
+
+```toml
+[vars]
+JACKPOT_THRESHOLD = "1500"  # in millions ($1.5 billion)
+```
+
+Adjust this value to set your preferred notification threshold:
+- `"1000"` = $1 billion
+- `"1500"` = $1.5 billion (default)
+- `"2000"` = $2 billion
+
+The threshold is validated on startup and falls back to the default if invalid.
+
 ### Data Sources
 
 The worker uses different methods to fetch data from each lottery:
@@ -129,9 +154,8 @@ Both handlers use the same data fetching functions (`checkMegaMillions()` and `c
 
 ## Future Enhancements
 
-- [ ] Store last-notified amount to avoid duplicate alerts
-- [ ] Configurable jackpot threshold
 - [ ] Add notification system (email, SMS, or webhook)
+- [ ] Store last-notified amount to avoid duplicate alerts
 
 ## License
 
