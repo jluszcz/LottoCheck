@@ -1,0 +1,2 @@
+# LottoCheck
+Check lottery jackpots
