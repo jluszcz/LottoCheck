@@ -129,11 +129,9 @@ Both handlers use the same data fetching functions (`checkMegaMillions()` and `c
 
 ## Future Enhancements
 
-- [ ] Add notification system (email, SMS, or webhook)
-- [ ] Configurable jackpot threshold
 - [ ] Store last-notified amount to avoid duplicate alerts
-- [ ] Support for additional lottery games
-- [ ] Historical jackpot tracking
+- [ ] Configurable jackpot threshold
+- [ ] Add notification system (email, SMS, or webhook)
 
 ## License
 

@@ -3,6 +3,9 @@
  * Checks Mega Millions and Powerball jackpots daily at 3pm ET
  */
 
+// Default threshold: $1.5 billion (represented in millions)
+const DEFAULT_THRESHOLD_MILLIONS = 1500;
+
 export default {
 	/**
 	 * HTTP handler - for testing purposes
@@ -18,10 +21,12 @@ export default {
 				checkPowerball()
 			]);
 
+			// Check against threshold and annotate results
+			const thresholdResults = checkThresholds(megaMillions, powerball, env);
+
 			const results = {
 				timestamp: new Date().toISOString(),
-				megaMillions,
-				powerball
+				...thresholdResults
 			};
 
 			return new Response(JSON.stringify(results, null, 2), {
@@ -52,15 +57,69 @@ export default {
 				checkPowerball()
 			]);
 
+			// Check against threshold and annotate results
+			const results = checkThresholds(megaMillions, powerball, env);
+
 			// Log results
-			console.log('Mega Millions:', megaMillions);
-			console.log('Powerball:', powerball);
+			console.log('Mega Millions:', results.megaMillions);
+			console.log('Powerball:', results.powerball);
+			console.log('Threshold:', results.threshold);
+
+			// Log alert if any lottery exceeds threshold
+			if (results.threshold.exceeded) {
+				console.log(`ALERT: ${results.threshold.exceedingLotteries.join(' and ')} exceeded threshold of ${results.threshold.display}`);
+			}
 
 		} catch (error) {
 			console.error('Error checking jackpots:', error);
 		}
 	}
 };
+
+/**
+ * Check lottery results against threshold and annotate with threshold status
+ * @param {object} megaMillions - Mega Millions result object
+ * @param {object} powerball - Powerball result object
+ * @param {object} env - Environment variables
+ * @returns {object} Results with threshold information
+ */
+function checkThresholds(megaMillions, powerball, env) {
+	// Get threshold from environment or use default
+	const thresholdMillions = env?.JACKPOT_THRESHOLD
+		? parseFloat(env.JACKPOT_THRESHOLD)
+		: DEFAULT_THRESHOLD_MILLIONS;
+
+	// Check each lottery against threshold
+	const megaExceeds = megaMillions.jackpotAmount >= thresholdMillions;
+	const powerballExceeds = powerball.jackpotAmount >= thresholdMillions;
+
+	// Build list of lotteries that exceed threshold
+	const exceedingLotteries = [];
+	if (megaExceeds) exceedingLotteries.push('Mega Millions');
+	if (powerballExceeds) exceedingLotteries.push('Powerball');
+
+	// Format threshold for display
+	const thresholdDisplay = thresholdMillions >= 1000
+		? `$${(thresholdMillions / 1000).toFixed(2)} Billion`
+		: `$${thresholdMillions.toFixed(0)} Million`;
+
+	return {
+		megaMillions: {
+			...megaMillions,
+			exceedsThreshold: megaExceeds
+		},
+		powerball: {
+			...powerball,
+			exceedsThreshold: powerballExceeds
+		},
+		threshold: {
+			amount: thresholdMillions,
+			display: thresholdDisplay,
+			exceeded: exceedingLotteries.length > 0,
+			exceedingLotteries
+		}
+	};
+}
 
 /**
  * Check current Mega Millions jackpot
