@@ -9,12 +9,47 @@ const DEFAULT_THRESHOLD_MILLIONS = 1500;
 // Conversion constant
 const BILLION_IN_MILLIONS = 1000;
 
+/**
+ * @typedef {Object} LotteryResult
+ * @property {string} lottery - Name of the lottery ("Mega Millions" or "Powerball")
+ * @property {string} jackpot - Formatted jackpot display string (e.g., "$1.70 Billion")
+ * @property {number} jackpotAmount - Jackpot amount in millions for comparisons
+ * @property {string} nextDrawing - Formatted next drawing date
+ * @property {string} [error] - Error message if fetch/parse failed
+ */
+
+/**
+ * @typedef {Object} LotteryResultWithThreshold
+ * @property {string} lottery - Name of the lottery
+ * @property {string} jackpot - Formatted jackpot display string
+ * @property {number} jackpotAmount - Jackpot amount in millions
+ * @property {string} nextDrawing - Formatted next drawing date
+ * @property {boolean} exceedsThreshold - Whether jackpot exceeds threshold
+ * @property {string} [error] - Error message if fetch/parse failed
+ */
+
+/**
+ * @typedef {Object} ThresholdInfo
+ * @property {number} amount - Threshold amount in millions
+ * @property {string} display - Formatted threshold display string
+ * @property {boolean} exceeded - Whether any lottery exceeds threshold
+ * @property {string[]} exceedingLotteries - List of lotteries that exceed threshold
+ */
+
+/**
+ * @typedef {Object} ThresholdResults
+ * @property {LotteryResultWithThreshold} megaMillions - Mega Millions data with threshold flag
+ * @property {LotteryResultWithThreshold} powerball - Powerball data with threshold flag
+ * @property {ThresholdInfo} threshold - Threshold metadata
+ */
+
 export default {
 	/**
 	 * HTTP handler - for testing purposes
 	 * @param {Request} request
 	 * @param {object} env - Environment variables
 	 * @param {ExecutionContext} ctx
+	 * @returns {Promise<Response>} JSON response with lottery data and threshold information
 	 */
 	async fetch(request, env, ctx) {
 		try {
@@ -49,6 +84,7 @@ export default {
 	 * @param {ScheduledController} controller
 	 * @param {object} env - Environment variables
 	 * @param {ExecutionContext} ctx
+	 * @returns {Promise<void>} Logs jackpot data to console
 	 */
 	async scheduled(controller, env, ctx) {
 		console.log('LottoCheck: Starting jackpot check at', new Date().toISOString());
@@ -94,10 +130,10 @@ function formatJackpotDisplay(amountInMillions) {
 
 /**
  * Check lottery results against threshold and annotate with threshold status
- * @param {object} megaMillions - Mega Millions result object
- * @param {object} powerball - Powerball result object
+ * @param {LotteryResult} megaMillions - Mega Millions result object
+ * @param {LotteryResult} powerball - Powerball result object
  * @param {object} env - Environment variables
- * @returns {object} Results with threshold information
+ * @returns {ThresholdResults} Results with threshold information
  */
 function checkThresholds(megaMillions, powerball, env) {
 	// Get threshold from environment or use default
@@ -106,9 +142,13 @@ function checkThresholds(megaMillions, powerball, env) {
 		? parsed
 		: DEFAULT_THRESHOLD_MILLIONS;
 
-	// Check each lottery against threshold (only if no error)
-	const megaExceeds = !megaMillions.error && megaMillions.jackpotAmount >= thresholdMillions;
-	const powerballExceeds = !powerball.error && powerball.jackpotAmount >= thresholdMillions;
+	// Check each lottery against threshold (only if no error and valid number)
+	const megaExceeds = !megaMillions.error &&
+		typeof megaMillions.jackpotAmount === 'number' &&
+		megaMillions.jackpotAmount >= thresholdMillions;
+	const powerballExceeds = !powerball.error &&
+		typeof powerball.jackpotAmount === 'number' &&
+		powerball.jackpotAmount >= thresholdMillions;
 
 	// Build list of lotteries that exceed threshold
 	const exceedingLotteries = [];
@@ -135,7 +175,7 @@ function checkThresholds(megaMillions, powerball, env) {
 
 /**
  * Check current Mega Millions jackpot
- * @returns {Promise<{lottery: string, jackpot: string, jackpotAmount: number, nextDrawing: string, error?: string}>}
+ * @returns {Promise<LotteryResult>}
  */
 async function checkMegaMillions() {
 	try {
@@ -187,7 +227,7 @@ async function checkMegaMillions() {
 
 /**
  * Check current Powerball jackpot
- * @returns {Promise<{lottery: string, jackpot: string, jackpotAmount: number, nextDrawing: string, error?: string}>}
+ * @returns {Promise<LotteryResult>}
  */
 async function checkPowerball() {
 	try {
@@ -230,9 +270,20 @@ async function checkPowerball() {
 			}
 		}
 
+		// Check if scraping was successful
+		if (!jackpot) {
+			return {
+				lottery: 'Powerball',
+				jackpot: 'Not found',
+				jackpotAmount: 0,
+				nextDrawing: nextDrawing || 'Not found',
+				error: 'Failed to parse jackpot from HTML'
+			};
+		}
+
 		return {
 			lottery: 'Powerball',
-			jackpot: jackpot || 'Not found',
+			jackpot,
 			jackpotAmount,
 			nextDrawing: nextDrawing || 'Not found'
 		};

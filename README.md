@@ -83,6 +83,70 @@ Visit `http://localhost:8787` to see current jackpot data in JSON format:
 
 **Note**: Scheduled triggers don't run automatically in local development. Use the HTTP endpoint for testing.
 
+## Testing
+
+### Running Tests
+
+The project includes a comprehensive test suite with 21 unit tests covering all functionality.
+
+```bash
+# Run all tests once
+npm test
+
+# Run tests in watch mode (re-runs on file changes)
+npm run test:watch
+```
+
+### Test Structure
+
+Tests are organized by feature area:
+- **Fetch handler**: HTTP endpoint functionality
+- **Scheduled handler**: Cron trigger and logging behavior
+- **Threshold checking**: Jackpot comparison logic and edge cases
+- **Mega Millions API**: API response parsing and error handling
+- **Powerball scraping**: HTML parsing with multiple patterns
+
+### Test Helpers and Fixtures
+
+The test suite uses helper functions and fixtures to reduce duplication:
+
+```javascript
+// Use test fixtures for consistent data
+setupMockFetch({
+  megaMillionsJackpot: fixtures.megaMillions.twoBillion.amount,
+  powerballJackpot: fixtures.powerball.twoBillion
+});
+
+// Or use individual mock helpers
+mockMegaMillionsResponse(1700000000);
+mockPowerballResponse('$1.50 Billion');
+```
+
+Available fixtures:
+- `fixtures.megaMillions`: Common jackpot amounts (billion, halfBillion, twoBillion)
+- `fixtures.powerball`: Formatted jackpot strings
+- `fixtures.dates`: Test date values
+- `fixtures.thresholds`: Common threshold values
+
+### Continuous Integration
+
+Tests run automatically on:
+- Every push to `main` branch
+- Every pull request to `main` branch
+
+GitHub Actions workflow runs tests and must pass before PRs can be merged.
+
+### Test Coverage
+
+The test suite provides comprehensive coverage:
+- ✓ All public functions tested
+- ✓ Success and error paths covered
+- ✓ Edge cases validated (null/undefined handling, missing data)
+- ✓ HTTP headers and response format verified
+- ✓ Threshold logic tested with various scenarios
+
+**Note**: Coverage reporting is not available due to CloudFlare Workers environment limitations (no `node:inspector` support).
+
 ## Deployment
 
 Deploy to CloudFlare Workers:
