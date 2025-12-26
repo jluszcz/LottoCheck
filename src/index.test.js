@@ -608,5 +608,8 @@ describe('Powerball scraping', () => {
 		expect(data.powerball.lottery).toBe('Powerball');
 		expect(data.powerball.jackpot).toBe('Not found');
 		expect(data.powerball.jackpotAmount).toBe(0);
+		expect(data.powerball.error).toBe('Failed to parse jackpot from HTML');
+		// Should not exceed threshold when there's a scraping error
+		expect(data.powerball.exceedsThreshold).toBe(false);
 	});
 });

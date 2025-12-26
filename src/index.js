@@ -234,9 +234,20 @@ async function checkPowerball() {
 			}
 		}
 
+		// Check if scraping was successful
+		if (!jackpot) {
+			return {
+				lottery: 'Powerball',
+				jackpot: 'Not found',
+				jackpotAmount: 0,
+				nextDrawing: nextDrawing || 'Not found',
+				error: 'Failed to parse jackpot from HTML'
+			};
+		}
+
 		return {
 			lottery: 'Powerball',
-			jackpot: jackpot || 'Not found',
+			jackpot,
 			jackpotAmount,
 			nextDrawing: nextDrawing || 'Not found'
 		};
