@@ -3,6 +3,12 @@
  * Checks Mega Millions and Powerball jackpots daily at 3pm ET
  */
 
+// Default threshold: $1.5 billion (represented in millions)
+const DEFAULT_THRESHOLD_MILLIONS = 1500;
+
+// Conversion constant
+const BILLION_IN_MILLIONS = 1000;
+
 export default {
 	/**
 	 * HTTP handler - for testing purposes
@@ -18,10 +24,12 @@ export default {
 				checkPowerball()
 			]);
 
+			// Check against threshold and annotate results
+			const thresholdResults = checkThresholds(megaMillions, powerball, env);
+
 			const results = {
 				timestamp: new Date().toISOString(),
-				megaMillions,
-				powerball
+				...thresholdResults
 			};
 
 			return new Response(JSON.stringify(results, null, 2), {
@@ -52,15 +60,78 @@ export default {
 				checkPowerball()
 			]);
 
+			// Check against threshold and annotate results
+			const results = checkThresholds(megaMillions, powerball, env);
+
 			// Log results
-			console.log('Mega Millions:', megaMillions);
-			console.log('Powerball:', powerball);
+			console.log('Mega Millions:', results.megaMillions);
+			console.log('Powerball:', results.powerball);
+			console.log('Threshold:', results.threshold);
+
+			// Log alert if any lottery exceeds threshold
+			if (results.threshold.exceeded) {
+				console.log(`ALERT: ${results.threshold.exceedingLotteries.join(' and ')} exceeded threshold of ${results.threshold.display}`);
+			}
 
 		} catch (error) {
 			console.error('Error checking jackpots:', error);
 		}
 	}
 };
+
+/**
+ * Format jackpot amount for display
+ * @param {number} amountInMillions - Jackpot amount in millions
+ * @returns {string} Formatted display string (e.g., "$1.70 Billion" or "$500 Million")
+ */
+function formatJackpotDisplay(amountInMillions) {
+	if (amountInMillions >= BILLION_IN_MILLIONS) {
+		const billions = amountInMillions / BILLION_IN_MILLIONS;
+		return `$${billions.toFixed(2)} Billion`;
+	}
+	return `$${amountInMillions.toFixed(0)} Million`;
+}
+
+/**
+ * Check lottery results against threshold and annotate with threshold status
+ * @param {object} megaMillions - Mega Millions result object
+ * @param {object} powerball - Powerball result object
+ * @param {object} env - Environment variables
+ * @returns {object} Results with threshold information
+ */
+function checkThresholds(megaMillions, powerball, env) {
+	// Get threshold from environment or use default
+	const parsed = parseFloat(env?.JACKPOT_THRESHOLD);
+	const thresholdMillions = !isNaN(parsed) && parsed > 0
+		? parsed
+		: DEFAULT_THRESHOLD_MILLIONS;
+
+	// Check each lottery against threshold (only if no error)
+	const megaExceeds = !megaMillions.error && megaMillions.jackpotAmount >= thresholdMillions;
+	const powerballExceeds = !powerball.error && powerball.jackpotAmount >= thresholdMillions;
+
+	// Build list of lotteries that exceed threshold
+	const exceedingLotteries = [];
+	if (megaExceeds) exceedingLotteries.push('Mega Millions');
+	if (powerballExceeds) exceedingLotteries.push('Powerball');
+
+	return {
+		megaMillions: {
+			...megaMillions,
+			exceedsThreshold: megaExceeds
+		},
+		powerball: {
+			...powerball,
+			exceedsThreshold: powerballExceeds
+		},
+		threshold: {
+			amount: thresholdMillions,
+			display: formatJackpotDisplay(thresholdMillions),
+			exceeded: exceedingLotteries.length > 0,
+			exceedingLotteries
+		}
+	};
+}
 
 /**
  * Check current Mega Millions jackpot
@@ -85,17 +156,8 @@ async function checkMegaMillions() {
 
 		// Convert to millions and format
 		const jackpotInMillions = nextPrizePool / 1000000;
-		let jackpot;
-		let jackpotAmount;
-
-		if (jackpotInMillions >= 1000) {
-			const billions = jackpotInMillions / 1000;
-			jackpot = `$${billions.toFixed(2)} Billion`;
-			jackpotAmount = jackpotInMillions;
-		} else {
-			jackpot = `$${jackpotInMillions.toFixed(0)} Million`;
-			jackpotAmount = jackpotInMillions;
-		}
+		const jackpot = formatJackpotDisplay(jackpotInMillions);
+		const jackpotAmount = jackpotInMillions;
 
 		// Format drawing date
 		const nextDrawing = nextDrawingDate.toLocaleDateString('en-US', {

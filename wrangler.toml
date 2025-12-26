@@ -3,6 +3,10 @@ main = "src/index.js"
 compatibility_date = "2024-12-01"
 compatibility_flags = ["nodejs_compat"]
 
+[vars]
+# Jackpot threshold in millions (1500 = $1.5 billion)
+JACKPOT_THRESHOLD = "1500"
+
 [triggers]
 # Runs daily at 8pm UTC (3pm EST / 4pm EDT)
 crons = ["0 20 * * *"]
