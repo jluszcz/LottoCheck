@@ -23,15 +23,44 @@ afterEach(() => {
 });
 
 /**
+ * Test Fixtures - Common test data for consistent testing
+ */
+const fixtures = {
+	megaMillions: {
+		billion: { amount: 1700000000, display: '$1.70 Billion' },
+		halfBillion: { amount: 500000000, display: '$500 Million' },
+		twoBillion: { amount: 2000000000, display: '$2.00 Billion' },
+	},
+	powerball: {
+		billion: '$1.50 Billion',
+		halfBillion: '$450 Million',
+		twoBillion: '$1.80 Billion',
+	},
+	dates: {
+		default: '2025-12-26T00:00:00',
+		christmas: '2024-12-25T00:00:00',
+		newYear: '2025-01-01T00:00:00',
+	},
+	thresholds: {
+		low: 500,
+		default: 1500,
+		high: 2000,
+	}
+};
+
+/**
  * Mock helper functions to reduce duplication
  */
 
 /**
  * Create a mock Mega Millions API response
  * @param {number} jackpotAmount - Jackpot amount in dollars (e.g., 1700000000 for $1.7B)
- * @param {string} drawingDate - ISO date string for next drawing
+ * @param {string} [drawingDate='2025-12-26T00:00:00'] - ISO date string for next drawing
+ * @returns {Promise<Object>} Mock fetch response with Mega Millions data
+ * @example
+ * mockMegaMillionsResponse(fixtures.megaMillions.billion.amount)
  */
-function mockMegaMillionsResponse(jackpotAmount, drawingDate = '2025-12-26T00:00:00') {
+function mockMegaMillionsResponse(jackpotAmount, drawingDate = fixtures.dates.default) {
 	return Promise.resolve({
 		json: () => Promise.resolve({
 			d: JSON.stringify({
@@ -45,7 +74,10 @@ function mockMegaMillionsResponse(jackpotAmount, drawingDate = '2025-12-26T00:00
 /**
  * Create a mock Powerball HTML response
  * @param {string} jackpotText - Jackpot text to include in HTML (e.g., "$1.70 Billion")
- * @param {string} drawingText - Drawing date text (e.g., "Friday, December 27, 2024")
+ * @param {string} [drawingText='Friday, December 27, 2024'] - Drawing date text
+ * @returns {Promise<Object>} Mock fetch response with Powerball HTML
+ * @example
+ * mockPowerballResponse(fixtures.powerball.billion)
  */
 function mockPowerballResponse(jackpotText, drawingText = 'Friday, December 27, 2024') {
 	const html = `<html>Estimated Jackpot: ${jackpotText} Next Drawing: ${drawingText}</html>`;
@@ -56,6 +88,9 @@ function mockPowerballResponse(jackpotText, drawingText = 'Friday, December 27, 
 
 /**
  * Create a mock Powerball HTML response with no jackpot data
+ * @returns {Promise<Object>} Mock fetch response with empty Powerball HTML
+ * @example
+ * mockPowerballEmptyResponse()
  */
 function mockPowerballEmptyResponse() {
 	return Promise.resolve({
@@ -65,11 +100,21 @@ function mockPowerballEmptyResponse() {
 
 /**
  * Setup mock fetch with both lottery responses
- * @param {Object} options - Mock configuration
- * @param {number} options.megaMillionsJackpot - Mega Millions jackpot in dollars
- * @param {string} options.powerballJackpot - Powerball jackpot display text
+ * @param {Object} [options={}] - Mock configuration
+ * @param {number} [options.megaMillionsJackpot=1700000000] - Mega Millions jackpot in dollars
+ * @param {string} [options.powerballJackpot='$1.50 Billion'] - Powerball jackpot display text
+ * @returns {Function} Mock fetch function for verification
+ * @example
+ * setupMockFetch() // Uses defaults
+ * setupMockFetch({
+ *   megaMillionsJackpot: fixtures.megaMillions.twoBillion.amount,
+ *   powerballJackpot: fixtures.powerball.twoBillion
+ * })
  */
-function setupMockFetch({ megaMillionsJackpot = 1700000000, powerballJackpot = '$1.50 Billion' } = {}) {
+function setupMockFetch({
+	megaMillionsJackpot = fixtures.megaMillions.billion.amount,
+	powerballJackpot = fixtures.powerball.billion
+} = {}) {
 	const mockFetch = vi.fn();
 	mockFetch.mockImplementationOnce(() => mockMegaMillionsResponse(megaMillionsJackpot));
 	mockFetch.mockImplementationOnce(() => mockPowerballResponse(powerballJackpot));
