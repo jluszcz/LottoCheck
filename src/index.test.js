@@ -1,10 +1,26 @@
 import { env, createExecutionContext, waitOnExecutionContext, SELF } from 'cloudflare:test';
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import worker from './index.js';
 
 /**
  * Test suite for LottoCheck CloudFlare Worker
  */
+
+// Store original functions to restore after each test
+let originalFetch;
+let originalConsoleLog;
+
+beforeEach(() => {
+	// Save originals before each test
+	originalFetch = global.fetch;
+	originalConsoleLog = console.log;
+});
+
+afterEach(() => {
+	// Restore originals after each test
+	global.fetch = originalFetch;
+	console.log = originalConsoleLog;
+});
 
 describe('LottoCheck Worker', () => {
 	describe('fetch handler', () => {
@@ -73,7 +89,6 @@ describe('LottoCheck Worker', () => {
 		it('logs jackpot data on scheduled trigger', async () => {
 			// Mock console.log to verify logging
 			const consoleLogs = [];
-			const originalLog = console.log;
 			console.log = vi.fn((...args) => {
 				consoleLogs.push(args.join(' '));
 			});
@@ -108,14 +123,10 @@ describe('LottoCheck Worker', () => {
 			expect(consoleLogs.some(log => log.includes('LottoCheck: Starting jackpot check'))).toBe(true);
 			expect(consoleLogs.some(log => log.includes('Mega Millions:'))).toBe(true);
 			expect(consoleLogs.some(log => log.includes('Powerball:'))).toBe(true);
-
-			// Restore console.log
-			console.log = originalLog;
 		});
 
 		it('logs alert when threshold is exceeded', async () => {
 			const consoleLogs = [];
-			const originalLog = console.log;
 			console.log = vi.fn((...args) => {
 				consoleLogs.push(args.join(' '));
 			});
@@ -149,8 +160,6 @@ describe('LottoCheck Worker', () => {
 			// Verify alert was logged
 			expect(consoleLogs.some(log => log.includes('ALERT:'))).toBe(true);
 			expect(consoleLogs.some(log => log.includes('exceeded threshold'))).toBe(true);
-
-			console.log = originalLog;
 		});
 	});
 });
