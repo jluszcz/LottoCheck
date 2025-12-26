@@ -7,22 +7,37 @@ A CloudFlare Worker that monitors Mega Millions and Powerball jackpots daily and
 - **Automated Daily Checks**: Runs automatically at 3pm ET every day
 - **Dual Lottery Support**: Monitors both Mega Millions and Powerball
 - **Configurable Threshold**: Set your own jackpot threshold (defaults to $1.5 billion)
-- **Real-time Data**: Scrapes official lottery websites for current jackpot amounts
+- **Email Notifications**: Get notified via MailChannels when jackpots cross your threshold
+- **Smart Threshold Crossing Detection**: Only notifies when jackpot moves from below to above threshold
+- **Persistent State**: Uses CloudFlare KV to remember previous jackpot amounts
+- **Real-time Data**: Fetches from official lottery sources
 - **HTTP API**: Test endpoint for manual checks during development
-- **Zero Cost**: Runs on CloudFlare's free tier
+- **Zero Cost**: Runs on CloudFlare's free tier (including email via MailChannels)
 
 ## How It Works
 
-The worker fetches lottery data from official sources daily:
-- **Mega Millions**: Uses official API endpoint for reliable, structured data
-- **Powerball**: Scrapes the official website HTML
+The worker runs daily at 3pm ET and:
 
-Extracted data includes:
-- Current jackpot amount (e.g., "$1.70 Billion")
-- Normalized jackpot value in millions (for threshold comparisons)
-- Next drawing date
+1. **Fetches Current Jackpots** from official sources:
+   - **Mega Millions**: Uses official API endpoint for reliable, structured data
+   - **Powerball**: Scrapes the official website HTML
 
-Currently logs results to CloudFlare's dashboard. Notification functionality is planned for a future release.
+2. **Retrieves Previous Jackpots** from CloudFlare KV storage
+
+3. **Detects Threshold Crossings**:
+   - Compares previous and current jackpot amounts
+   - Only triggers notifications when a jackpot crosses from below to above your threshold
+   - Prevents duplicate notifications when jackpots stay above threshold
+
+4. **Sends Email Notifications** (via MailChannels) when a threshold crossing is detected, including:
+   - Lottery name
+   - Previous and current jackpot amounts
+   - Your threshold
+   - Next drawing date
+
+5. **Stores Current Jackpots** in KV for the next run
+
+6. **Logs Results** to CloudFlare's dashboard for monitoring
 
 ## Setup
 
@@ -87,7 +102,7 @@ Visit `http://localhost:8787` to see current jackpot data in JSON format:
 
 ### Running Tests
 
-The project includes a comprehensive test suite with 21 unit tests covering all functionality.
+The project includes a comprehensive test suite covering all functionality.
 
 ```bash
 # Run all tests once
@@ -102,6 +117,10 @@ npm run test:watch
 Tests are organized by feature area:
 - **Fetch handler**: HTTP endpoint functionality
 - **Scheduled handler**: Cron trigger and logging behavior
+- **KV Storage**: Previous jackpot retrieval and storage
+- **Threshold Crossing Detection**: Below→above crossing logic
+- **Email Notifications**: MailChannels integration and HTML formatting
+- **Integration**: End-to-end scheduled handler with KV and email
 - **Threshold checking**: Jackpot comparison logic and edge cases
 - **Mega Millions API**: API response parsing and error handling
 - **Powerball scraping**: HTML parsing with multiple patterns
@@ -189,6 +208,57 @@ Adjust this value to set your preferred notification threshold:
 
 The threshold is validated on startup and falls back to the default if invalid.
 
+### Email Notifications
+
+Email notifications are sent via MailChannels when a jackpot crosses your threshold.
+
+**Production Setup** (recommended - keeps emails private):
+```bash
+# Set secrets that won't be committed to git
+wrangler secret put FROM_EMAIL
+# Enter: alerts@yourdomain.com
+
+wrangler secret put TO_EMAIL
+# Enter: your-email@example.com
+
+# Deploy
+npm run deploy
+```
+
+**Local Development Setup**:
+```bash
+# Copy the example file
+cp .dev.vars.example .dev.vars
+
+# Edit .dev.vars with your actual email addresses
+# This file is in .gitignore and won't be committed
+
+# Run locally
+npm run dev
+```
+
+**Note**: If these variables are not set, the worker will skip email sending and only log results.
+
+### KV Storage
+
+The worker uses CloudFlare KV to store previous jackpot amounts for threshold crossing detection.
+
+**Setup Steps**:
+1. Create KV namespaces:
+   ```bash
+   wrangler kv:namespace create "LOTTERY_STATE"
+   wrangler kv:namespace create "LOTTERY_STATE" --preview
+   ```
+2. Update `wrangler.toml` with the returned namespace IDs:
+   ```toml
+   [[kv_namespaces]]
+   binding = "LOTTERY_STATE"
+   id = "your-production-namespace-id"
+   ```
+3. Deploy the worker
+
+**Note**: If KV is not configured, the worker will treat all jackpots as first-time checks (previous amount = $0).
+
 ### Data Sources
 
 The worker uses different methods to fetch data from each lottery:
@@ -210,16 +280,18 @@ The worker exports two handlers:
 1. **`fetch()`** - HTTP handler for manual testing and on-demand checks
 2. **`scheduled()`** - Cron handler that runs on the configured schedule
 
-Both handlers use the same data fetching functions (`checkMegaMillions()` and `checkPowerball()`), which:
+The **scheduled handler** integrates all components:
+1. Fetches current jackpots using `checkMegaMillions()` and `checkPowerball()`
+2. Retrieves previous jackpots from KV using `getPreviousJackpot()`
+3. Detects threshold crossings using `detectThresholdCrossing()`
+4. Sends email notifications via `sendEmail()` (MailChannels integration)
+5. Stores current jackpots using `storePreviousJackpot()`
+
+Data fetching functions:
 - **Mega Millions**: Calls official API endpoint for structured JSON data
 - **Powerball**: Scrapes HTML with multiple regex patterns for robustness
 - Return standardized data objects
 - Handle errors gracefully without throwing
-
-## Future Enhancements
-
-- [ ] Add notification system (email, SMS, or webhook)
-- [ ] Store last-notified amount to avoid duplicate alerts
 
 ## License
 

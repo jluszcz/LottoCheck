@@ -260,6 +260,134 @@ describe('LottoCheck Worker', () => {
 			expect(consoleLogs.some(log => log.includes('ALERT:'))).toBe(true);
 			expect(consoleLogs.some(log => log.includes('exceeded threshold'))).toBe(true);
 		});
+
+	describe('Integration - KV and Email', () => {
+		it('stores jackpots in KV after check', async () => {
+			const mockFetch = setupMockFetch();
+			const mockKV = {
+				get: vi.fn().mockResolvedValue(null),
+				put: vi.fn().mockResolvedValue(undefined)
+			};
+			const mockEnv = {
+				...env,
+				LOTTERY_STATE: mockKV,
+				JACKPOT_THRESHOLD: '1500'
+			};
+
+			const controller = {};
+			const ctx = createExecutionContext();
+
+			await worker.scheduled(controller, mockEnv, ctx);
+			await waitOnExecutionContext(ctx);
+
+			expect(mockKV.put).toHaveBeenCalledWith('Mega Millions', expect.any(String));
+			expect(mockKV.put).toHaveBeenCalledWith('Powerball', expect.any(String));
+		});
+
+		it('sends email on threshold crossing', async () => {
+			const mockFetch = vi.fn();
+			mockFetch.mockImplementationOnce(() => mockMegaMillionsResponse(fixtures.megaMillions.twoBillion.amount));
+			mockFetch.mockImplementationOnce(() => mockPowerballResponse(fixtures.powerball.halfBillion));
+			mockFetch.mockImplementationOnce(() => Promise.resolve({ ok: true, status: 200 }));
+			global.fetch = mockFetch;
+
+			const mockKV = {
+				get: vi.fn().mockResolvedValue(JSON.stringify({ jackpotAmount: 1000, lastChecked: '2025-01-01' })),
+				put: vi.fn().mockResolvedValue(undefined)
+			};
+			const mockEnv = {
+				...env,
+				LOTTERY_STATE: mockKV,
+				JACKPOT_THRESHOLD: '1500',
+				FROM_EMAIL: 'from@test.com',
+				TO_EMAIL: 'to@test.com'
+			};
+
+			const controller = {};
+			const ctx = createExecutionContext();
+
+			await worker.scheduled(controller, mockEnv, ctx);
+			await waitOnExecutionContext(ctx);
+
+			const mailChannelsCalls = mockFetch.mock.calls.filter(
+				call => call[0] === 'https://api.mailchannels.net/tx/v1/send'
+			);
+			expect(mailChannelsCalls.length).toBe(1);
+		});
+
+		it('does not send email when staying above threshold', async () => {
+			const mockFetch = setupMockFetch({
+				megaMillionsJackpot: fixtures.megaMillions.twoBillion.amount,
+				powerballJackpot: fixtures.powerball.twoBillion
+			});
+
+			const mockKV = {
+				get: vi.fn().mockResolvedValue(JSON.stringify({ jackpotAmount: 1700, lastChecked: '2025-01-01' })),
+				put: vi.fn().mockResolvedValue(undefined)
+			};
+			const mockEnv = {
+				...env,
+				LOTTERY_STATE: mockKV,
+				JACKPOT_THRESHOLD: '1500',
+				FROM_EMAIL: 'from@test.com',
+				TO_EMAIL: 'to@test.com'
+			};
+
+			const controller = {};
+			const ctx = createExecutionContext();
+
+			await worker.scheduled(controller, mockEnv, ctx);
+			await waitOnExecutionContext(ctx);
+
+			expect(mockFetch.mock.calls.length).toBe(2);
+		});
+
+		it('handles KV namespace being undefined', async () => {
+			const mockFetch = setupMockFetch();
+			const mockEnv = {
+				...env,
+				LOTTERY_STATE: undefined,
+				JACKPOT_THRESHOLD: '1500'
+			};
+
+			const controller = {};
+			const ctx = createExecutionContext();
+
+			await expect(
+				worker.scheduled(controller, mockEnv, ctx)
+			).resolves.not.toThrow();
+			await waitOnExecutionContext(ctx);
+		});
+
+		it('stores jackpots even if email fails', async () => {
+			const mockFetch = vi.fn();
+			mockFetch.mockImplementationOnce(() => mockMegaMillionsResponse(fixtures.megaMillions.twoBillion.amount));
+			mockFetch.mockImplementationOnce(() => mockPowerballResponse(fixtures.powerball.halfBillion));
+			mockFetch.mockImplementationOnce(() => Promise.resolve({ ok: false, status: 500, statusText: 'Error', text: () => Promise.resolve('') }));
+			global.fetch = mockFetch;
+
+			const mockKV = {
+				get: vi.fn().mockResolvedValue(JSON.stringify({ jackpotAmount: 1000, lastChecked: '2025-01-01' })),
+				put: vi.fn().mockResolvedValue(undefined)
+			};
+			const mockEnv = {
+				...env,
+				LOTTERY_STATE: mockKV,
+				JACKPOT_THRESHOLD: '1500',
+				FROM_EMAIL: 'from@test.com',
+				TO_EMAIL: 'to@test.com'
+			};
+
+			const controller = {};
+			const ctx = createExecutionContext();
+
+			await worker.scheduled(controller, mockEnv, ctx);
+			await waitOnExecutionContext(ctx);
+
+			expect(mockKV.put).toHaveBeenCalledWith('Mega Millions', expect.any(String));
+			expect(mockKV.put).toHaveBeenCalledWith('Powerball', expect.any(String));
+		});
+	});
 	});
 });
 
@@ -719,5 +847,151 @@ describe('Powerball scraping', () => {
 		expect(data.powerball.error).toBe('Failed to parse jackpot from HTML');
 		// Should not exceed threshold when there's a scraping error
 		expect(data.powerball.exceedsThreshold).toBe(false);
+	});
+
+	describe('KV Storage', () => {
+		/**
+		 * Create a mock KV namespace for testing
+		 * @returns {Object} Mock KV namespace with get/put methods
+		 */
+		function createMockKV() {
+			const storage = new Map();
+			return {
+				get: vi.fn(async (key) => storage.get(key) || null),
+				put: vi.fn(async (key, value) => {
+					storage.set(key, value);
+				}),
+				delete: vi.fn(async (key) => storage.delete(key)),
+				_storage: storage // Expose for testing assertions
+			};
+		}
+
+		describe('getPreviousJackpot', () => {
+			it('returns 0 when key does not exist', async () => {
+				const mockKV = createMockKV();
+				const { getPreviousJackpot } = await import('./index.js');
+
+				const result = await getPreviousJackpot(mockKV, 'Mega Millions');
+
+				expect(result).toBe(0);
+				expect(mockKV.get).toHaveBeenCalledWith('Mega Millions');
+			});
+
+			it('returns stored value when key exists', async () => {
+				const mockKV = createMockKV();
+				const { getPreviousJackpot } = await import('./index.js');
+
+				// Store a previous jackpot value
+				const storedData = {
+					jackpotAmount: 1500,
+					lastChecked: '2025-12-25T20:00:00.000Z'
+				};
+				mockKV._storage.set('Mega Millions', JSON.stringify(storedData));
+
+				const result = await getPreviousJackpot(mockKV, 'Mega Millions');
+
+				expect(result).toBe(1500);
+			});
+
+			it('handles malformed JSON gracefully', async () => {
+				const mockKV = createMockKV();
+				const { getPreviousJackpot } = await import('./index.js');
+
+				// Store invalid JSON
+				mockKV._storage.set('Powerball', 'not valid json {');
+
+				const result = await getPreviousJackpot(mockKV, 'Powerball');
+
+				expect(result).toBe(0);
+			});
+
+			it('handles undefined KV namespace gracefully', async () => {
+				const { getPreviousJackpot } = await import('./index.js');
+
+				const result = await getPreviousJackpot(undefined, 'Mega Millions');
+
+				expect(result).toBe(0);
+			});
+
+			it('handles missing jackpotAmount field', async () => {
+				const mockKV = createMockKV();
+				const { getPreviousJackpot } = await import('./index.js');
+
+				// Store data without jackpotAmount field
+				const storedData = {
+					lastChecked: '2025-12-25T20:00:00.000Z'
+				};
+				mockKV._storage.set('Powerball', JSON.stringify(storedData));
+
+				const result = await getPreviousJackpot(mockKV, 'Powerball');
+
+				expect(result).toBe(0);
+			});
+		});
+
+		describe('storePreviousJackpot', () => {
+			it('writes correct format to KV', async () => {
+				const mockKV = createMockKV();
+				const { storePreviousJackpot } = await import('./index.js');
+
+				await storePreviousJackpot(mockKV, 'Mega Millions', 1700);
+
+				expect(mockKV.put).toHaveBeenCalledWith('Mega Millions', expect.any(String));
+
+				// Verify the stored data structure
+				const storedValue = mockKV._storage.get('Mega Millions');
+				const data = JSON.parse(storedValue);
+
+				expect(data.jackpotAmount).toBe(1700);
+				expect(data).toHaveProperty('lastChecked');
+			});
+
+			it('includes timestamp in stored data', async () => {
+				const mockKV = createMockKV();
+				const { storePreviousJackpot } = await import('./index.js');
+
+				const beforeTime = new Date().toISOString();
+				await storePreviousJackpot(mockKV, 'Powerball', 1500);
+				const afterTime = new Date().toISOString();
+
+				const storedValue = mockKV._storage.get('Powerball');
+				const data = JSON.parse(storedValue);
+
+				// Verify timestamp is a valid ISO string
+				expect(() => new Date(data.lastChecked)).not.toThrow();
+				// Timestamp should be between before and after
+				expect(data.lastChecked >= beforeTime).toBe(true);
+				expect(data.lastChecked <= afterTime).toBe(true);
+			});
+
+			it('handles undefined KV namespace gracefully', async () => {
+				const { storePreviousJackpot } = await import('./index.js');
+
+				// Should not throw
+				await expect(
+					storePreviousJackpot(undefined, 'Mega Millions', 1700)
+				).resolves.toBeUndefined();
+			});
+
+			it('handles KV put errors gracefully', async () => {
+				const mockKV = {
+					put: vi.fn().mockRejectedValue(new Error('KV write failed'))
+				};
+				const { storePreviousJackpot } = await import('./index.js');
+
+				// Mock console.error to verify error logging
+				const consoleErrorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+
+				// Should not throw
+				await expect(
+					storePreviousJackpot(mockKV, 'Powerball', 1500)
+				).resolves.toBeUndefined();
+
+				expect(consoleErrorSpy).toHaveBeenCalled();
+
+				// Restore console.error
+				consoleErrorSpy.mockRestore();
+			});
+		});
 	});
 });
