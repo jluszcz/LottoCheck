@@ -31,16 +31,27 @@ The worker exports an object with two handlers:
 
 2. **`scheduled(controller, env, ctx)`** - Cron handler
    - Triggered daily at 8pm UTC (3pm EST / 4pm EDT)
+   - Retrieves previous jackpot amounts from KV storage
+   - Detects threshold crossings (below→above transitions)
+   - Sends email notifications via MailChannels when threshold is crossed
+   - Stores current jackpot amounts in KV for next run
    - Logs jackpot data to CloudFlare dashboard
-   - Production notification logic should be added here
 
 ### Data Flow
 
-Both handlers call the same data fetching functions in parallel:
-- `checkMegaMillions()` - Calls Mega Millions API endpoint
-- `checkPowerball()` - Scrapes powerball.com HTML
+**fetch() handler** - Simple data fetching:
+- Calls `checkMegaMillions()` and `checkPowerball()` in parallel
+- Applies threshold checking via `checkThresholds()`
+- Returns JSON response
 
-Each returns a standardized object:
+**scheduled() handler** - Full notification workflow:
+1. Fetches current jackpots: `checkMegaMillions()` and `checkPowerball()`
+2. Retrieves previous amounts: `getPreviousJackpot()` from KV
+3. Detects crossings: `detectThresholdCrossing()` for each lottery
+4. Sends notifications: `sendEmail()` via MailChannels if threshold crossed
+5. Stores current state: `storePreviousJackpot()` to KV
+
+Data fetching functions return a standardized object:
 ```javascript
 {
   lottery: string,        // "Mega Millions" or "Powerball"
@@ -81,9 +92,27 @@ Scheduled trigger is defined in `wrangler.toml`:
 crons = ["0 20 * * *"]  # 8pm UTC = 3pm EST / 4pm EDT
 ```
 
-## Future Work
+## Implemented Features
 
-Notification logic is not yet implemented. When adding:
-- Use environment variables for notification credentials (email/SMS/webhook)
-- Store last-notified threshold in KV or Durable Objects to avoid repeat notifications
-- Add threshold configuration (e.g., notify when jackpot > $500M)
+**Email Notifications via MailChannels**:
+- Configured via `FROM_EMAIL` and `TO_EMAIL` environment variables in `wrangler.toml`
+- Sends HTML-formatted emails when threshold is crossed
+- Gracefully handles missing configuration (skips email sending)
+
+**KV Storage**:
+- Stores previous jackpot amounts to enable threshold crossing detection
+- Key format: lottery name (e.g., "Mega Millions")
+- Value format: JSON with `jackpotAmount` (in millions) and `lastChecked` timestamp
+- Configured via `LOTTERY_STATE` KV namespace binding
+
+**Threshold Crossing Detection**:
+- Only notifies when jackpot transitions from below to above threshold
+- Prevents duplicate notifications when jackpot stays above threshold
+- Implemented via `detectThresholdCrossing()` function
+
+## Future Enhancement Ideas
+
+- Add SMS notifications (via Twilio or similar)
+- Add webhook support for custom integrations
+- Support for additional lotteries beyond Mega Millions and Powerball
+- Web dashboard for viewing historical jackpot trends

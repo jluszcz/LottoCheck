@@ -7,6 +7,17 @@ compatibility_flags = ["nodejs_compat"]
 # Jackpot threshold in millions (1500 = $1.5 billion)
 JACKPOT_THRESHOLD = "1500"
 
+# Email configuration for MailChannels notifications
+# Set these using: wrangler secret put FROM_EMAIL
+# Set these using: wrangler secret put TO_EMAIL
+# Example values (replace with your own):
+# FROM_EMAIL = "alerts@yourdomain.com"
+# TO_EMAIL = "your-email@example.com"
+
+[[kv_namespaces]]
+binding = "LOTTERY_STATE"
+id = "7bd735f4c3664b5888f38d41ebd72ada"
+
 [triggers]
 # Runs daily at 8pm UTC (3pm EST / 4pm EDT)
 crons = ["0 20 * * *"]
