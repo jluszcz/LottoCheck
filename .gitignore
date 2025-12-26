@@ -11,6 +11,7 @@
 .vscode/*
 .wrangler/
 Thumbs.db
+coverage/
 dist/
 node_modules/
 npm-debug.log*

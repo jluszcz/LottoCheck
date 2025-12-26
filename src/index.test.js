@@ -22,35 +22,65 @@ afterEach(() => {
 	console.log = originalConsoleLog;
 });
 
+/**
+ * Mock helper functions to reduce duplication
+ */
+
+/**
+ * Create a mock Mega Millions API response
+ * @param {number} jackpotAmount - Jackpot amount in dollars (e.g., 1700000000 for $1.7B)
+ * @param {string} drawingDate - ISO date string for next drawing
+ */
+function mockMegaMillionsResponse(jackpotAmount, drawingDate = '2025-12-26T00:00:00') {
+	return Promise.resolve({
+		json: () => Promise.resolve({
+			d: JSON.stringify({
+				Jackpot: { NextPrizePool: jackpotAmount },
+				NextDrawingDate: drawingDate
+			})
+		})
+	});
+}
+
+/**
+ * Create a mock Powerball HTML response
+ * @param {string} jackpotText - Jackpot text to include in HTML (e.g., "$1.70 Billion")
+ * @param {string} drawingText - Drawing date text (e.g., "Friday, December 27, 2024")
+ */
+function mockPowerballResponse(jackpotText, drawingText = 'Friday, December 27, 2024') {
+	const html = `<html>Estimated Jackpot: ${jackpotText} Next Drawing: ${drawingText}</html>`;
+	return Promise.resolve({
+		text: () => Promise.resolve(html)
+	});
+}
+
+/**
+ * Create a mock Powerball HTML response with no jackpot data
+ */
+function mockPowerballEmptyResponse() {
+	return Promise.resolve({
+		text: () => Promise.resolve('<html>No jackpot data here</html>')
+	});
+}
+
+/**
+ * Setup mock fetch with both lottery responses
+ * @param {Object} options - Mock configuration
+ * @param {number} options.megaMillionsJackpot - Mega Millions jackpot in dollars
+ * @param {string} options.powerballJackpot - Powerball jackpot display text
+ */
+function setupMockFetch({ megaMillionsJackpot = 1700000000, powerballJackpot = '$1.50 Billion' } = {}) {
+	const mockFetch = vi.fn();
+	mockFetch.mockImplementationOnce(() => mockMegaMillionsResponse(megaMillionsJackpot));
+	mockFetch.mockImplementationOnce(() => mockPowerballResponse(powerballJackpot));
+	global.fetch = mockFetch;
+	return mockFetch;
+}
+
 describe('LottoCheck Worker', () => {
 	describe('fetch handler', () => {
 		it('returns jackpot data for both lotteries', async () => {
-			// Mock fetch for external API calls
-			const mockFetch = vi.fn();
-
-			// Mock Mega Millions API response
-			mockFetch.mockImplementationOnce(() =>
-				Promise.resolve({
-					json: () => Promise.resolve({
-						d: JSON.stringify({
-							Jackpot: { NextPrizePool: 1700000000 },
-							NextDrawingDate: '2025-12-26T00:00:00'
-						})
-					})
-				})
-			);
-
-			// Mock Powerball HTML response
-			mockFetch.mockImplementationOnce(() =>
-				Promise.resolve({
-					text: () => Promise.resolve(
-						'<html>Estimated Jackpot: $1.50 Billion Next Drawing: Friday, December 27, 2024</html>'
-					)
-				})
-			);
-
-			// Replace global fetch
-			global.fetch = mockFetch;
+			setupMockFetch();
 
 			const request = new Request('http://localhost');
 			const ctx = createExecutionContext();
@@ -82,6 +112,30 @@ describe('LottoCheck Worker', () => {
 			// Should still return data, but with error fields
 			expect(data.megaMillions).toHaveProperty('error');
 			expect(data.powerball).toHaveProperty('error');
+		});
+
+		it('returns correct Content-Type header', async () => {
+			setupMockFetch();
+
+			const request = new Request('http://localhost');
+			const ctx = createExecutionContext();
+			const response = await worker.fetch(request, env, ctx);
+
+			expect(response.headers.get('Content-Type')).toBe('application/json');
+		});
+
+		it('includes timestamp in response', async () => {
+			setupMockFetch();
+
+			const request = new Request('http://localhost');
+			const ctx = createExecutionContext();
+			const response = await worker.fetch(request, env, ctx);
+			const data = await response.json();
+
+			expect(data).toHaveProperty('timestamp');
+			expect(typeof data.timestamp).toBe('string');
+			// Verify it's a valid ISO date string
+			expect(() => new Date(data.timestamp)).not.toThrow();
 		});
 	});
 
