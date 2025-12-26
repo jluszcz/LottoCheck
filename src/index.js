@@ -106,9 +106,13 @@ function checkThresholds(megaMillions, powerball, env) {
 		? parsed
 		: DEFAULT_THRESHOLD_MILLIONS;
 
-	// Check each lottery against threshold (only if no error)
-	const megaExceeds = !megaMillions.error && megaMillions.jackpotAmount >= thresholdMillions;
-	const powerballExceeds = !powerball.error && powerball.jackpotAmount >= thresholdMillions;
+	// Check each lottery against threshold (only if no error and valid number)
+	const megaExceeds = !megaMillions.error &&
+		typeof megaMillions.jackpotAmount === 'number' &&
+		megaMillions.jackpotAmount >= thresholdMillions;
+	const powerballExceeds = !powerball.error &&
+		typeof powerball.jackpotAmount === 'number' &&
+		powerball.jackpotAmount >= thresholdMillions;
 
 	// Build list of lotteries that exceed threshold
 	const exceedingLotteries = [];

@@ -316,6 +316,66 @@ describe('Threshold checking', () => {
 
 		expect(data.threshold.display).toBe('$500 Million');
 	});
+
+	it('handles null/undefined jackpotAmount gracefully', async () => {
+		const mockFetch = vi.fn();
+
+		// Mock Mega Millions with valid data
+		mockFetch.mockImplementationOnce(() =>
+			Promise.resolve({
+				json: () => Promise.resolve({
+					d: JSON.stringify({
+						Jackpot: { NextPrizePool: 2000000000 }, // $2B
+						NextDrawingDate: '2025-12-26T00:00:00'
+					})
+				})
+			})
+		);
+		// Mock Powerball with data that would produce null/undefined jackpotAmount
+		mockFetch.mockImplementationOnce(() =>
+			Promise.resolve({
+				text: () => Promise.resolve('<html>No jackpot info here</html>')
+			})
+		);
+		global.fetch = mockFetch;
+
+		const request = new Request('http://localhost');
+		const ctx = createExecutionContext();
+		const response = await worker.fetch(request, { JACKPOT_THRESHOLD: '1500' }, ctx);
+		const data = await response.json();
+
+		// Mega Millions should exceed threshold
+		expect(data.megaMillions.exceedsThreshold).toBe(true);
+		// Powerball with jackpotAmount: 0 should not exceed threshold
+		expect(data.powerball.exceedsThreshold).toBe(false);
+		// Only Mega Millions should be in the exceeding list
+		expect(data.threshold.exceeded).toBe(true);
+		expect(data.threshold.exceedingLotteries).toEqual(['Mega Millions']);
+	});
+
+	it('handles errors without triggering threshold exceeded', async () => {
+		const mockFetch = vi.fn();
+
+		// Mock both APIs to fail
+		mockFetch.mockImplementationOnce(() =>
+			Promise.reject(new Error('Network error'))
+		);
+		mockFetch.mockImplementationOnce(() =>
+			Promise.reject(new Error('Network error'))
+		);
+		global.fetch = mockFetch;
+
+		const request = new Request('http://localhost');
+		const ctx = createExecutionContext();
+		const response = await worker.fetch(request, { JACKPOT_THRESHOLD: '0' }, ctx);
+		const data = await response.json();
+
+		// Neither should exceed threshold when there are errors
+		expect(data.megaMillions.exceedsThreshold).toBe(false);
+		expect(data.powerball.exceedsThreshold).toBe(false);
+		expect(data.threshold.exceeded).toBe(false);
+		expect(data.threshold.exceedingLotteries).toHaveLength(0);
+	});
 });
 
 describe('Mega Millions API', () => {
