@@ -1,6 +1,6 @@
 import { env, createExecutionContext, waitOnExecutionContext, SELF } from 'cloudflare:test';
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import worker from './index.js';
+import worker, { detectThresholdCrossing, buildNotificationEmail, sendEmail } from './index.js';
 
 /**
  * Test suite for LottoCheck CloudFlare Worker
@@ -993,5 +993,357 @@ describe('Powerball scraping', () => {
 				consoleErrorSpy.mockRestore();
 			});
 		});
+	});
+});
+
+/**
+ * Unit Tests for Core Notification Functions
+ */
+
+describe('detectThresholdCrossing', () => {
+	it('detects crossing from below to above threshold', () => {
+		const result = detectThresholdCrossing(1000, 1600, 1500);
+
+		expect(result.crossed).toBe(true);
+		expect(result.previousAmount).toBe(1000);
+		expect(result.currentAmount).toBe(1600);
+		expect(result.threshold).toBe(1500);
+	});
+
+	it('detects crossing when current amount equals threshold', () => {
+		const result = detectThresholdCrossing(1000, 1500, 1500);
+
+		expect(result.crossed).toBe(true);
+		expect(result.previousAmount).toBe(1000);
+		expect(result.currentAmount).toBe(1500);
+		expect(result.threshold).toBe(1500);
+	});
+
+	it('does not detect crossing when staying above threshold', () => {
+		const result = detectThresholdCrossing(1600, 1800, 1500);
+
+		expect(result.crossed).toBe(false);
+		expect(result.previousAmount).toBe(1600);
+		expect(result.currentAmount).toBe(1800);
+		expect(result.threshold).toBe(1500);
+	});
+
+	it('does not detect crossing when staying below threshold', () => {
+		const result = detectThresholdCrossing(1000, 1200, 1500);
+
+		expect(result.crossed).toBe(false);
+		expect(result.previousAmount).toBe(1000);
+		expect(result.currentAmount).toBe(1200);
+		expect(result.threshold).toBe(1500);
+	});
+
+	it('does not detect crossing when going from above to below threshold', () => {
+		// This prevents notifications on downward movements
+		const result = detectThresholdCrossing(1800, 1200, 1500);
+
+		expect(result.crossed).toBe(false);
+		expect(result.previousAmount).toBe(1800);
+		expect(result.currentAmount).toBe(1200);
+		expect(result.threshold).toBe(1500);
+	});
+
+	it('handles zero previous amount crossing threshold', () => {
+		const result = detectThresholdCrossing(0, 1600, 1500);
+
+		expect(result.crossed).toBe(true);
+		expect(result.previousAmount).toBe(0);
+		expect(result.currentAmount).toBe(1600);
+		expect(result.threshold).toBe(1500);
+	});
+
+	it('does not detect crossing when both amounts are zero', () => {
+		const result = detectThresholdCrossing(0, 0, 1500);
+
+		expect(result.crossed).toBe(false);
+	});
+
+	it('handles very large jackpot amounts', () => {
+		const result = detectThresholdCrossing(2500, 3000, 2800);
+
+		expect(result.crossed).toBe(true);
+		expect(result.previousAmount).toBe(2500);
+		expect(result.currentAmount).toBe(3000);
+		expect(result.threshold).toBe(2800);
+	});
+});
+
+describe('buildNotificationEmail', () => {
+	it('generates valid HTML email with all required elements', () => {
+		const html = buildNotificationEmail('Mega Millions', 1000, 1700, 1500, 'Fri, Dec 26, 2025');
+
+		// Check HTML structure
+		expect(html).toContain('<!DOCTYPE html>');
+		expect(html).toContain('<html>');
+		expect(html).toContain('</html>');
+		expect(html).toContain('<body>');
+		expect(html).toContain('</body>');
+	});
+
+	it('includes lottery name in email content', () => {
+		const html = buildNotificationEmail('Mega Millions', 1000, 1700, 1500, 'Fri, Dec 26, 2025');
+
+		expect(html).toContain('Mega Millions');
+		expect(html).toContain('has crossed your threshold');
+	});
+
+	it('displays previous amount correctly formatted', () => {
+		const html = buildNotificationEmail('Powerball', 1000, 1700, 1500, 'Sat, Dec 27, 2025');
+
+		expect(html).toContain('Previous');
+		expect(html).toContain('$1.00 Billion');
+	});
+
+	it('displays current amount correctly formatted', () => {
+		const html = buildNotificationEmail('Mega Millions', 1000, 1700, 1500, 'Fri, Dec 26, 2025');
+
+		expect(html).toContain('Current');
+		expect(html).toContain('$1.70 Billion');
+	});
+
+	it('displays threshold correctly formatted', () => {
+		const html = buildNotificationEmail('Mega Millions', 1000, 1700, 1500, 'Fri, Dec 26, 2025');
+
+		expect(html).toContain('Your threshold');
+		expect(html).toContain('$1.50 Billion');
+	});
+
+	it('includes next drawing date', () => {
+		const html = buildNotificationEmail('Powerball', 1000, 1800, 1500, 'Saturday, Dec 28, 2025');
+
+		expect(html).toContain('Next drawing');
+		expect(html).toContain('Saturday, Dec 28, 2025');
+	});
+
+	it('formats amounts in millions correctly', () => {
+		const html = buildNotificationEmail('Mega Millions', 450, 650, 500, 'Fri, Dec 26, 2025');
+
+		expect(html).toContain('$450 Million');
+		expect(html).toContain('$650 Million');
+		expect(html).toContain('$500 Million');
+	});
+
+	it('formats amounts in billions correctly', () => {
+		const html = buildNotificationEmail('Powerball', 1500, 2000, 1800, 'Sat, Dec 27, 2025');
+
+		expect(html).toContain('$1.50 Billion');
+		expect(html).toContain('$2.00 Billion');
+		expect(html).toContain('$1.80 Billion');
+	});
+
+	it('includes automated notification footer', () => {
+		const html = buildNotificationEmail('Mega Millions', 1000, 1700, 1500, 'Fri, Dec 26, 2025');
+
+		expect(html).toContain('automated notification');
+		expect(html).toContain('LottoCheck');
+	});
+
+	it('includes CSS styling for email formatting', () => {
+		const html = buildNotificationEmail('Mega Millions', 1000, 1700, 1500, 'Fri, Dec 26, 2025');
+
+		expect(html).toContain('<style>');
+		expect(html).toContain('font-family');
+		expect(html).toContain('.container');
+	});
+
+	it('includes jackpot alert emoji/icon', () => {
+		const html = buildNotificationEmail('Powerball', 1000, 1700, 1500, 'Sat, Dec 27, 2025');
+
+		expect(html).toContain('🎰');
+		expect(html).toContain('Lottery Jackpot Alert');
+	});
+
+	it('handles very large jackpot amounts', () => {
+		const html = buildNotificationEmail('Mega Millions', 2500, 3500, 3000, 'Fri, Dec 26, 2025');
+
+		expect(html).toContain('$2.50 Billion');
+		expect(html).toContain('$3.50 Billion');
+		expect(html).toContain('$3.00 Billion');
+	});
+});
+
+describe('sendEmail', () => {
+	it('successfully sends email when API responds with OK', async () => {
+		const mockFetch = vi.fn().mockResolvedValue({
+			ok: true,
+			status: 200
+		});
+		global.fetch = mockFetch;
+
+		const result = await sendEmail(
+			'from@example.com',
+			'to@example.com',
+			'Test Subject',
+			'<html>Test Body</html>'
+		);
+
+		expect(result.success).toBe(true);
+		expect(result.error).toBeUndefined();
+		expect(mockFetch).toHaveBeenCalledTimes(1);
+	});
+
+	it('calls MailChannels API with correct endpoint', async () => {
+		const mockFetch = vi.fn().mockResolvedValue({
+			ok: true,
+			status: 200
+		});
+		global.fetch = mockFetch;
+
+		await sendEmail(
+			'from@example.com',
+			'to@example.com',
+			'Test Subject',
+			'<html>Test</html>'
+		);
+
+		expect(mockFetch).toHaveBeenCalledWith(
+			'https://api.mailchannels.net/tx/v1/send',
+			expect.any(Object)
+		);
+	});
+
+	it('sends correct email structure to MailChannels', async () => {
+		const mockFetch = vi.fn().mockResolvedValue({
+			ok: true,
+			status: 200
+		});
+		global.fetch = mockFetch;
+
+		await sendEmail(
+			'sender@domain.com',
+			'recipient@domain.com',
+			'Jackpot Alert',
+			'<html>Email Content</html>'
+		);
+
+		const callArgs = mockFetch.mock.calls[0][1];
+		expect(callArgs.method).toBe('POST');
+		expect(callArgs.headers['Content-Type']).toBe('application/json');
+
+		const body = JSON.parse(callArgs.body);
+		expect(body.personalizations[0].to[0].email).toBe('recipient@domain.com');
+		expect(body.from.email).toBe('sender@domain.com');
+		expect(body.subject).toBe('Jackpot Alert');
+		expect(body.content[0].type).toBe('text/html');
+		expect(body.content[0].value).toBe('<html>Email Content</html>');
+	});
+
+	it('returns error when API responds with error status', async () => {
+		const mockFetch = vi.fn().mockResolvedValue({
+			ok: false,
+			status: 500,
+			statusText: 'Internal Server Error',
+			text: () => Promise.resolve('Server error details')
+		});
+		global.fetch = mockFetch;
+
+		const result = await sendEmail(
+			'from@example.com',
+			'to@example.com',
+			'Test',
+			'<html>Test</html>'
+		);
+
+		expect(result.success).toBe(false);
+		expect(result.error).toContain('MailChannels API error');
+		expect(result.error).toContain('500');
+		expect(result.error).toContain('Internal Server Error');
+	});
+
+	it('handles network errors gracefully', async () => {
+		const mockFetch = vi.fn().mockRejectedValue(new Error('Network timeout'));
+		global.fetch = mockFetch;
+
+		const result = await sendEmail(
+			'from@example.com',
+			'to@example.com',
+			'Test',
+			'<html>Test</html>'
+		);
+
+		expect(result.success).toBe(false);
+		expect(result.error).toContain('Email send failed');
+		expect(result.error).toContain('Network timeout');
+	});
+
+	it('handles API authentication errors (401)', async () => {
+		const mockFetch = vi.fn().mockResolvedValue({
+			ok: false,
+			status: 401,
+			statusText: 'Unauthorized',
+			text: () => Promise.resolve('Invalid credentials')
+		});
+		global.fetch = mockFetch;
+
+		const result = await sendEmail(
+			'from@example.com',
+			'to@example.com',
+			'Test',
+			'<html>Test</html>'
+		);
+
+		expect(result.success).toBe(false);
+		expect(result.error).toContain('401');
+		expect(result.error).toContain('Unauthorized');
+	});
+
+	it('handles API rate limiting errors (429)', async () => {
+		const mockFetch = vi.fn().mockResolvedValue({
+			ok: false,
+			status: 429,
+			statusText: 'Too Many Requests',
+			text: () => Promise.resolve('Rate limit exceeded')
+		});
+		global.fetch = mockFetch;
+
+		const result = await sendEmail(
+			'from@example.com',
+			'to@example.com',
+			'Test',
+			'<html>Test</html>'
+		);
+
+		expect(result.success).toBe(false);
+		expect(result.error).toContain('429');
+		expect(result.error).toContain('Rate limit exceeded');
+	});
+
+	it('includes error response body in error message', async () => {
+		const mockFetch = vi.fn().mockResolvedValue({
+			ok: false,
+			status: 400,
+			statusText: 'Bad Request',
+			text: () => Promise.resolve('Invalid email format')
+		});
+		global.fetch = mockFetch;
+
+		const result = await sendEmail(
+			'invalid-email',
+			'to@example.com',
+			'Test',
+			'<html>Test</html>'
+		);
+
+		expect(result.success).toBe(false);
+		expect(result.error).toContain('Invalid email format');
+	});
+
+	it('handles fetch throwing non-Error objects', async () => {
+		const mockFetch = vi.fn().mockRejectedValue('String error');
+		global.fetch = mockFetch;
+
+		const result = await sendEmail(
+			'from@example.com',
+			'to@example.com',
+			'Test',
+			'<html>Test</html>'
+		);
+
+		expect(result.success).toBe(false);
+		expect(result.error).toBeDefined();
 	});
 });
