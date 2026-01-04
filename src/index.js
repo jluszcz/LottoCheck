@@ -83,6 +83,17 @@ export async function storePreviousJackpot(kv, lotteryName, jackpotAmount) {
  * @returns {ThresholdCrossingInfo} Crossing detection result
  */
 export function detectThresholdCrossing(previousAmount, currentAmount, thresholdMillions) {
+	// Validate inputs
+	if (typeof previousAmount !== 'number' || isNaN(previousAmount)) {
+		throw new Error('previousAmount must be a valid number');
+	}
+	if (typeof currentAmount !== 'number' || isNaN(currentAmount)) {
+		throw new Error('currentAmount must be a valid number');
+	}
+	if (typeof thresholdMillions !== 'number' || isNaN(thresholdMillions)) {
+		throw new Error('thresholdMillions must be a valid number');
+	}
+
 	// Return crossing info with crossed=true ONLY when:
 	// - previousAmount < threshold AND currentAmount >= threshold
 	// This ensures we only notify on the upward crossing, not when it stays above
@@ -198,12 +209,7 @@ export async function sendEmail(fromEmail, toEmail, subject, htmlBody) {
 		if (response.ok) {
 			return { success: true };
 		} else {
-			let errorText = '';
-			try {
-				errorText = await response.text();
-			} catch (textError) {
-				errorText = '(unable to read error response)';
-			}
+			const errorText = await response.text().catch(() => '(unable to read error response)');
 			return {
 				success: false,
 				error: `MailChannels API error: ${response.status} ${response.statusText} - ${errorText}`

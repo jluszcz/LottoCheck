@@ -1163,6 +1163,48 @@ describe('detectThresholdCrossing', () => {
 		expect(result.currentAmount).toBe(3000);
 		expect(result.threshold).toBe(2800);
 	});
+
+	describe('input validation', () => {
+		it('throws error when previousAmount is not a number', () => {
+			expect(() => detectThresholdCrossing('invalid', 1600, 1500))
+				.toThrow('previousAmount must be a valid number');
+		});
+
+		it('throws error when previousAmount is NaN', () => {
+			expect(() => detectThresholdCrossing(NaN, 1600, 1500))
+				.toThrow('previousAmount must be a valid number');
+		});
+
+		it('throws error when currentAmount is not a number', () => {
+			expect(() => detectThresholdCrossing(1000, 'invalid', 1500))
+				.toThrow('currentAmount must be a valid number');
+		});
+
+		it('throws error when currentAmount is NaN', () => {
+			expect(() => detectThresholdCrossing(1000, NaN, 1500))
+				.toThrow('currentAmount must be a valid number');
+		});
+
+		it('throws error when thresholdMillions is not a number', () => {
+			expect(() => detectThresholdCrossing(1000, 1600, 'invalid'))
+				.toThrow('thresholdMillions must be a valid number');
+		});
+
+		it('throws error when thresholdMillions is NaN', () => {
+			expect(() => detectThresholdCrossing(1000, 1600, NaN))
+				.toThrow('thresholdMillions must be a valid number');
+		});
+
+		it('throws error when previousAmount is undefined', () => {
+			expect(() => detectThresholdCrossing(undefined, 1600, 1500))
+				.toThrow('previousAmount must be a valid number');
+		});
+
+		it('throws error when currentAmount is null', () => {
+			expect(() => detectThresholdCrossing(1000, null, 1500))
+				.toThrow('currentAmount must be a valid number');
+		});
+	});
 });
 
 describe('buildNotificationEmail', () => {
