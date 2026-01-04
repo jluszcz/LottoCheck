@@ -864,7 +864,7 @@ describe('Powerball scraping', () => {
 		mockFetch.mockImplementationOnce(() =>
 			Promise.resolve({
 				text: () => Promise.resolve(
-					'<html><h5>Mon, Jan 5, 2026</h5>Estimated Jackpot $86 Million</html>'
+					'<html>Next Drawing<h5>Mon, Jan 5, 2026</h5>Estimated Jackpot $86 Million</html>'
 				)
 			})
 		);

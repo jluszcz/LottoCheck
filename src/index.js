@@ -561,11 +561,12 @@ async function checkPowerball() {
 		// Handles both formats:
 		// - Abbreviated: "Mon, Jan 5, 2026"
 		// - Full: "Monday, January 5, 2026"
+		// Note: Must match "Next Drawing" to avoid matching past drawing dates
 		const drawingPatterns = [
-			/Next Drawing[^>]*>\s*([A-Za-z]{3},\s*[A-Za-z]{3}\s*\d{1,2},\s*\d{4})/i, // Abbreviated
-			/Next Drawing[^:]*:\s*([A-Za-z]+,\s*[A-Za-z]+\s*\d+,\s*\d{4})/i,          // Full format
-			/([A-Za-z]{3},\s*[A-Za-z]{3}\s*\d{1,2},\s*\d{4})/i,                       // Abbreviated (fallback)
-			/([A-Za-z]+,\s*[A-Za-z]+\s*\d+,\s*\d{4})/i                                 // Full (fallback)
+			/Next Drawing[^>]*>[\s\S]{0,100}?([A-Za-z]{3},\s*[A-Za-z]{3}\s*\d{1,2},\s*\d{4})/i, // Abbreviated with tags/whitespace
+			/Next Drawing[^:]*:\s*([A-Za-z]{3},\s*[A-Za-z]{3}\s*\d{1,2},\s*\d{4})/i,           // Abbreviated with colon
+			/Next Drawing[^:]*:\s*([A-Za-z]+,\s*[A-Za-z]+\s*\d+,\s*\d{4})/i,                   // Full format with colon
+			/Next Drawing[\s\S]{0,100}?([A-Za-z]{3},\s*[A-Za-z]{3}\s*\d{1,2},\s*\d{4})/i     // Abbreviated (flexible whitespace)
 		];
 
 		let nextDrawing = null;
