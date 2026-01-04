@@ -1,6 +1,6 @@
 import { env, createExecutionContext, waitOnExecutionContext, SELF } from 'cloudflare:test';
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import worker from './index.js';
+import worker, { getThreshold, detectThresholdCrossing, buildNotificationEmail, sendEmail, isEmailConfigured } from './index.js';
 
 /**
  * Test suite for LottoCheck CloudFlare Worker
@@ -260,6 +260,134 @@ describe('LottoCheck Worker', () => {
 			expect(consoleLogs.some(log => log.includes('ALERT:'))).toBe(true);
 			expect(consoleLogs.some(log => log.includes('exceeded threshold'))).toBe(true);
 		});
+
+	describe('Integration - KV and Email', () => {
+		it('stores jackpots in KV after check', async () => {
+			const mockFetch = setupMockFetch();
+			const mockKV = {
+				get: vi.fn().mockResolvedValue(null),
+				put: vi.fn().mockResolvedValue(undefined)
+			};
+			const mockEnv = {
+				...env,
+				LOTTERY_STATE: mockKV,
+				JACKPOT_THRESHOLD: '1500'
+			};
+
+			const controller = {};
+			const ctx = createExecutionContext();
+
+			await worker.scheduled(controller, mockEnv, ctx);
+			await waitOnExecutionContext(ctx);
+
+			expect(mockKV.put).toHaveBeenCalledWith('Mega Millions', expect.any(String));
+			expect(mockKV.put).toHaveBeenCalledWith('Powerball', expect.any(String));
+		});
+
+		it('sends email on threshold crossing', async () => {
+			const mockFetch = vi.fn();
+			mockFetch.mockImplementationOnce(() => mockMegaMillionsResponse(fixtures.megaMillions.twoBillion.amount));
+			mockFetch.mockImplementationOnce(() => mockPowerballResponse(fixtures.powerball.halfBillion));
+			mockFetch.mockImplementationOnce(() => Promise.resolve({ ok: true, status: 200 }));
+			global.fetch = mockFetch;
+
+			const mockKV = {
+				get: vi.fn().mockResolvedValue(JSON.stringify({ jackpotAmount: 1000, lastChecked: '2025-01-01' })),
+				put: vi.fn().mockResolvedValue(undefined)
+			};
+			const mockEnv = {
+				...env,
+				LOTTERY_STATE: mockKV,
+				JACKPOT_THRESHOLD: '1500',
+				FROM_EMAIL: 'from@test.com',
+				TO_EMAIL: 'to@test.com'
+			};
+
+			const controller = {};
+			const ctx = createExecutionContext();
+
+			await worker.scheduled(controller, mockEnv, ctx);
+			await waitOnExecutionContext(ctx);
+
+			const mailChannelsCalls = mockFetch.mock.calls.filter(
+				call => call[0] === 'https://api.mailchannels.net/tx/v1/send'
+			);
+			expect(mailChannelsCalls.length).toBe(1);
+		});
+
+		it('does not send email when staying above threshold', async () => {
+			const mockFetch = setupMockFetch({
+				megaMillionsJackpot: fixtures.megaMillions.twoBillion.amount,
+				powerballJackpot: fixtures.powerball.twoBillion
+			});
+
+			const mockKV = {
+				get: vi.fn().mockResolvedValue(JSON.stringify({ jackpotAmount: 1700, lastChecked: '2025-01-01' })),
+				put: vi.fn().mockResolvedValue(undefined)
+			};
+			const mockEnv = {
+				...env,
+				LOTTERY_STATE: mockKV,
+				JACKPOT_THRESHOLD: '1500',
+				FROM_EMAIL: 'from@test.com',
+				TO_EMAIL: 'to@test.com'
+			};
+
+			const controller = {};
+			const ctx = createExecutionContext();
+
+			await worker.scheduled(controller, mockEnv, ctx);
+			await waitOnExecutionContext(ctx);
+
+			expect(mockFetch.mock.calls.length).toBe(2);
+		});
+
+		it('handles KV namespace being undefined', async () => {
+			const mockFetch = setupMockFetch();
+			const mockEnv = {
+				...env,
+				LOTTERY_STATE: undefined,
+				JACKPOT_THRESHOLD: '1500'
+			};
+
+			const controller = {};
+			const ctx = createExecutionContext();
+
+			await expect(
+				worker.scheduled(controller, mockEnv, ctx)
+			).resolves.not.toThrow();
+			await waitOnExecutionContext(ctx);
+		});
+
+		it('stores jackpots even if email fails', async () => {
+			const mockFetch = vi.fn();
+			mockFetch.mockImplementationOnce(() => mockMegaMillionsResponse(fixtures.megaMillions.twoBillion.amount));
+			mockFetch.mockImplementationOnce(() => mockPowerballResponse(fixtures.powerball.halfBillion));
+			mockFetch.mockImplementationOnce(() => Promise.resolve({ ok: false, status: 500, statusText: 'Error', text: () => Promise.resolve('') }));
+			global.fetch = mockFetch;
+
+			const mockKV = {
+				get: vi.fn().mockResolvedValue(JSON.stringify({ jackpotAmount: 1000, lastChecked: '2025-01-01' })),
+				put: vi.fn().mockResolvedValue(undefined)
+			};
+			const mockEnv = {
+				...env,
+				LOTTERY_STATE: mockKV,
+				JACKPOT_THRESHOLD: '1500',
+				FROM_EMAIL: 'from@test.com',
+				TO_EMAIL: 'to@test.com'
+			};
+
+			const controller = {};
+			const ctx = createExecutionContext();
+
+			await worker.scheduled(controller, mockEnv, ctx);
+			await waitOnExecutionContext(ctx);
+
+			expect(mockKV.put).toHaveBeenCalledWith('Mega Millions', expect.any(String));
+			expect(mockKV.put).toHaveBeenCalledWith('Powerball', expect.any(String));
+		});
+	});
 	});
 });
 
@@ -483,6 +611,51 @@ describe('Threshold checking', () => {
 		expect(data.powerball.exceedsThreshold).toBe(false);
 		expect(data.threshold.exceeded).toBe(false);
 		expect(data.threshold.exceedingLotteries).toHaveLength(0);
+	});
+});
+
+describe('getThreshold', () => {
+	it('returns threshold from env when valid', () => {
+		const env = { JACKPOT_THRESHOLD: '2000' };
+		expect(getThreshold(env)).toBe(2000);
+	});
+
+	it('returns default threshold when env is undefined', () => {
+		expect(getThreshold(undefined)).toBe(1500);
+	});
+
+	it('returns default threshold when env is empty object', () => {
+		expect(getThreshold({})).toBe(1500);
+	});
+
+	it('returns default threshold when JACKPOT_THRESHOLD is missing', () => {
+		const env = { OTHER_VAR: 'value' };
+		expect(getThreshold(env)).toBe(1500);
+	});
+
+	it('returns default threshold when JACKPOT_THRESHOLD is not a number', () => {
+		const env = { JACKPOT_THRESHOLD: 'invalid' };
+		expect(getThreshold(env)).toBe(1500);
+	});
+
+	it('returns default threshold when JACKPOT_THRESHOLD is empty string', () => {
+		const env = { JACKPOT_THRESHOLD: '' };
+		expect(getThreshold(env)).toBe(1500);
+	});
+
+	it('returns default threshold when JACKPOT_THRESHOLD is zero', () => {
+		const env = { JACKPOT_THRESHOLD: '0' };
+		expect(getThreshold(env)).toBe(1500);
+	});
+
+	it('returns default threshold when JACKPOT_THRESHOLD is negative', () => {
+		const env = { JACKPOT_THRESHOLD: '-500' };
+		expect(getThreshold(env)).toBe(1500);
+	});
+
+	it('handles float values correctly', () => {
+		const env = { JACKPOT_THRESHOLD: '1750.5' };
+		expect(getThreshold(env)).toBe(1750.5);
 	});
 });
 
@@ -719,5 +892,791 @@ describe('Powerball scraping', () => {
 		expect(data.powerball.error).toBe('Failed to parse jackpot from HTML');
 		// Should not exceed threshold when there's a scraping error
 		expect(data.powerball.exceedsThreshold).toBe(false);
+	});
+
+	it('correctly parses abbreviated date format (Mon, Jan 5, 2026)', async () => {
+		const mockFetch = vi.fn();
+		mockFetch.mockImplementationOnce(() =>
+			Promise.resolve({
+				json: () => Promise.resolve({
+					d: JSON.stringify({
+						Jackpot: { NextPrizePool: 500000000 },
+						NextDrawingDate: '2025-12-26T00:00:00'
+					})
+				})
+			})
+		);
+		mockFetch.mockImplementationOnce(() =>
+			Promise.resolve({
+				text: () => Promise.resolve(
+					'<html>Next Drawing<h5>Mon, Jan 5, 2026</h5>Estimated Jackpot $86 Million</html>'
+				)
+			})
+		);
+		global.fetch = mockFetch;
+
+		const request = new Request('http://localhost');
+		const ctx = createExecutionContext();
+		const response = await worker.fetch(request, env, ctx);
+		const data = await response.json();
+
+		expect(data.powerball.lottery).toBe('Powerball');
+		expect(data.powerball.jackpot).toContain('Million');
+		expect(data.powerball.jackpotAmount).toBe(86);
+		expect(data.powerball.nextDrawing).toBe('Mon, Jan 5, 2026');
+	});
+
+	it('correctly parses abbreviated date with Next Drawing header', async () => {
+		const mockFetch = vi.fn();
+		mockFetch.mockImplementationOnce(() =>
+			Promise.resolve({
+				json: () => Promise.resolve({
+					d: JSON.stringify({
+						Jackpot: { NextPrizePool: 500000000 },
+						NextDrawingDate: '2025-12-26T00:00:00'
+					})
+				})
+			})
+		);
+		mockFetch.mockImplementationOnce(() =>
+			Promise.resolve({
+				text: () => Promise.resolve(
+					'<html>Next Drawing<h5>Wed, Dec 11, 2024</h5>Estimated Jackpot: $150 Million</html>'
+				)
+			})
+		);
+		global.fetch = mockFetch;
+
+		const request = new Request('http://localhost');
+		const ctx = createExecutionContext();
+		const response = await worker.fetch(request, env, ctx);
+		const data = await response.json();
+
+		expect(data.powerball.nextDrawing).toBe('Wed, Dec 11, 2024');
+		expect(data.powerball.jackpotAmount).toBe(150);
+	});
+
+	it('handles both abbreviated and full date formats', async () => {
+		const mockFetch = vi.fn();
+		mockFetch.mockImplementationOnce(() =>
+			Promise.resolve({
+				json: () => Promise.resolve({
+					d: JSON.stringify({
+						Jackpot: { NextPrizePool: 500000000 },
+						NextDrawingDate: '2025-12-26T00:00:00'
+					})
+				})
+			})
+		);
+		// Test with full format still works
+		mockFetch.mockImplementationOnce(() =>
+			Promise.resolve({
+				text: () => Promise.resolve(
+					'<html>Estimated Jackpot: $200 Million Next Drawing: Saturday, March 15, 2025</html>'
+				)
+			})
+		);
+		global.fetch = mockFetch;
+
+		const request = new Request('http://localhost');
+		const ctx = createExecutionContext();
+		const response = await worker.fetch(request, env, ctx);
+		const data = await response.json();
+
+		expect(data.powerball.nextDrawing).toBe('Saturday, March 15, 2025');
+		expect(data.powerball.jackpotAmount).toBe(200);
+	});
+
+	describe('KV Storage', () => {
+		/**
+		 * Create a mock KV namespace for testing
+		 * @returns {Object} Mock KV namespace with get/put methods
+		 */
+		function createMockKV() {
+			const storage = new Map();
+			return {
+				get: vi.fn(async (key) => storage.get(key) || null),
+				put: vi.fn(async (key, value) => {
+					storage.set(key, value);
+				}),
+				delete: vi.fn(async (key) => storage.delete(key)),
+				_storage: storage // Expose for testing assertions
+			};
+		}
+
+		describe('getPreviousJackpot', () => {
+			it('returns 0 when key does not exist', async () => {
+				const mockKV = createMockKV();
+				const { getPreviousJackpot } = await import('./index.js');
+
+				const result = await getPreviousJackpot(mockKV, 'Mega Millions');
+
+				expect(result).toBe(0);
+				expect(mockKV.get).toHaveBeenCalledWith('Mega Millions');
+			});
+
+			it('returns stored value when key exists', async () => {
+				const mockKV = createMockKV();
+				const { getPreviousJackpot } = await import('./index.js');
+
+				// Store a previous jackpot value
+				const storedData = {
+					jackpotAmount: 1500,
+					lastChecked: '2025-12-25T20:00:00.000Z'
+				};
+				mockKV._storage.set('Mega Millions', JSON.stringify(storedData));
+
+				const result = await getPreviousJackpot(mockKV, 'Mega Millions');
+
+				expect(result).toBe(1500);
+			});
+
+			it('handles malformed JSON gracefully', async () => {
+				const mockKV = createMockKV();
+				const { getPreviousJackpot } = await import('./index.js');
+
+				// Store invalid JSON
+				mockKV._storage.set('Powerball', 'not valid json {');
+
+				const result = await getPreviousJackpot(mockKV, 'Powerball');
+
+				expect(result).toBe(0);
+			});
+
+			it('handles undefined KV namespace gracefully', async () => {
+				const { getPreviousJackpot } = await import('./index.js');
+
+				const result = await getPreviousJackpot(undefined, 'Mega Millions');
+
+				expect(result).toBe(0);
+			});
+
+			it('handles missing jackpotAmount field', async () => {
+				const mockKV = createMockKV();
+				const { getPreviousJackpot } = await import('./index.js');
+
+				// Store data without jackpotAmount field
+				const storedData = {
+					lastChecked: '2025-12-25T20:00:00.000Z'
+				};
+				mockKV._storage.set('Powerball', JSON.stringify(storedData));
+
+				const result = await getPreviousJackpot(mockKV, 'Powerball');
+
+				expect(result).toBe(0);
+			});
+		});
+
+		describe('storePreviousJackpot', () => {
+			it('writes correct format to KV', async () => {
+				const mockKV = createMockKV();
+				const { storePreviousJackpot } = await import('./index.js');
+
+				await storePreviousJackpot(mockKV, 'Mega Millions', 1700);
+
+				expect(mockKV.put).toHaveBeenCalledWith('Mega Millions', expect.any(String));
+
+				// Verify the stored data structure
+				const storedValue = mockKV._storage.get('Mega Millions');
+				const data = JSON.parse(storedValue);
+
+				expect(data.jackpotAmount).toBe(1700);
+				expect(data).toHaveProperty('lastChecked');
+			});
+
+			it('includes timestamp in stored data', async () => {
+				const mockKV = createMockKV();
+				const { storePreviousJackpot } = await import('./index.js');
+
+				const beforeTime = new Date().toISOString();
+				await storePreviousJackpot(mockKV, 'Powerball', 1500);
+				const afterTime = new Date().toISOString();
+
+				const storedValue = mockKV._storage.get('Powerball');
+				const data = JSON.parse(storedValue);
+
+				// Verify timestamp is a valid ISO string
+				expect(() => new Date(data.lastChecked)).not.toThrow();
+				// Timestamp should be between before and after
+				expect(data.lastChecked >= beforeTime).toBe(true);
+				expect(data.lastChecked <= afterTime).toBe(true);
+			});
+
+			it('handles undefined KV namespace gracefully', async () => {
+				const { storePreviousJackpot } = await import('./index.js');
+
+				// Should not throw
+				await expect(
+					storePreviousJackpot(undefined, 'Mega Millions', 1700)
+				).resolves.toBeUndefined();
+			});
+
+			it('handles KV put errors gracefully', async () => {
+				const mockKV = {
+					put: vi.fn().mockRejectedValue(new Error('KV write failed'))
+				};
+				const { storePreviousJackpot } = await import('./index.js');
+
+				// Mock console.error to verify error logging
+				const consoleErrorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+
+				// Should not throw
+				await expect(
+					storePreviousJackpot(mockKV, 'Powerball', 1500)
+				).resolves.toBeUndefined();
+
+				expect(consoleErrorSpy).toHaveBeenCalled();
+
+				// Restore console.error
+				consoleErrorSpy.mockRestore();
+			});
+		});
+	});
+});
+
+/**
+ * Unit Tests for Core Notification Functions
+ */
+
+describe('detectThresholdCrossing', () => {
+	it('detects crossing from below to above threshold', () => {
+		const result = detectThresholdCrossing(1000, 1600, 1500);
+
+		expect(result.crossed).toBe(true);
+		expect(result.previousAmount).toBe(1000);
+		expect(result.currentAmount).toBe(1600);
+		expect(result.threshold).toBe(1500);
+	});
+
+	it('detects crossing when current amount equals threshold', () => {
+		const result = detectThresholdCrossing(1000, 1500, 1500);
+
+		expect(result.crossed).toBe(true);
+		expect(result.previousAmount).toBe(1000);
+		expect(result.currentAmount).toBe(1500);
+		expect(result.threshold).toBe(1500);
+	});
+
+	it('does not detect crossing when staying above threshold', () => {
+		const result = detectThresholdCrossing(1600, 1800, 1500);
+
+		expect(result.crossed).toBe(false);
+		expect(result.previousAmount).toBe(1600);
+		expect(result.currentAmount).toBe(1800);
+		expect(result.threshold).toBe(1500);
+	});
+
+	it('does not detect crossing when staying below threshold', () => {
+		const result = detectThresholdCrossing(1000, 1200, 1500);
+
+		expect(result.crossed).toBe(false);
+		expect(result.previousAmount).toBe(1000);
+		expect(result.currentAmount).toBe(1200);
+		expect(result.threshold).toBe(1500);
+	});
+
+	it('does not detect crossing when going from above to below threshold', () => {
+		// This prevents notifications on downward movements
+		const result = detectThresholdCrossing(1800, 1200, 1500);
+
+		expect(result.crossed).toBe(false);
+		expect(result.previousAmount).toBe(1800);
+		expect(result.currentAmount).toBe(1200);
+		expect(result.threshold).toBe(1500);
+	});
+
+	it('handles zero previous amount crossing threshold', () => {
+		const result = detectThresholdCrossing(0, 1600, 1500);
+
+		expect(result.crossed).toBe(true);
+		expect(result.previousAmount).toBe(0);
+		expect(result.currentAmount).toBe(1600);
+		expect(result.threshold).toBe(1500);
+	});
+
+	it('does not detect crossing when both amounts are zero', () => {
+		const result = detectThresholdCrossing(0, 0, 1500);
+
+		expect(result.crossed).toBe(false);
+	});
+
+	it('handles very large jackpot amounts', () => {
+		const result = detectThresholdCrossing(2500, 3000, 2800);
+
+		expect(result.crossed).toBe(true);
+		expect(result.previousAmount).toBe(2500);
+		expect(result.currentAmount).toBe(3000);
+		expect(result.threshold).toBe(2800);
+	});
+
+	describe('input validation', () => {
+		it('throws error when previousAmount is not a number', () => {
+			expect(() => detectThresholdCrossing('invalid', 1600, 1500))
+				.toThrow('previousAmount must be a valid number');
+		});
+
+		it('throws error when previousAmount is NaN', () => {
+			expect(() => detectThresholdCrossing(NaN, 1600, 1500))
+				.toThrow('previousAmount must be a valid number');
+		});
+
+		it('throws error when currentAmount is not a number', () => {
+			expect(() => detectThresholdCrossing(1000, 'invalid', 1500))
+				.toThrow('currentAmount must be a valid number');
+		});
+
+		it('throws error when currentAmount is NaN', () => {
+			expect(() => detectThresholdCrossing(1000, NaN, 1500))
+				.toThrow('currentAmount must be a valid number');
+		});
+
+		it('throws error when thresholdMillions is not a number', () => {
+			expect(() => detectThresholdCrossing(1000, 1600, 'invalid'))
+				.toThrow('thresholdMillions must be a valid number');
+		});
+
+		it('throws error when thresholdMillions is NaN', () => {
+			expect(() => detectThresholdCrossing(1000, 1600, NaN))
+				.toThrow('thresholdMillions must be a valid number');
+		});
+
+		it('throws error when previousAmount is undefined', () => {
+			expect(() => detectThresholdCrossing(undefined, 1600, 1500))
+				.toThrow('previousAmount must be a valid number');
+		});
+
+		it('throws error when currentAmount is null', () => {
+			expect(() => detectThresholdCrossing(1000, null, 1500))
+				.toThrow('currentAmount must be a valid number');
+		});
+	});
+});
+
+describe('buildNotificationEmail', () => {
+	it('generates valid HTML email with all required elements', () => {
+		const html = buildNotificationEmail('Mega Millions', 1000, 1700, 1500, 'Fri, Dec 26, 2025');
+
+		// Check HTML structure
+		expect(html).toContain('<!DOCTYPE html>');
+		expect(html).toContain('<html>');
+		expect(html).toContain('</html>');
+		expect(html).toContain('<body>');
+		expect(html).toContain('</body>');
+	});
+
+	it('includes lottery name in email content', () => {
+		const html = buildNotificationEmail('Mega Millions', 1000, 1700, 1500, 'Fri, Dec 26, 2025');
+
+		expect(html).toContain('Mega Millions');
+		expect(html).toContain('has crossed your threshold');
+	});
+
+	it('displays previous amount correctly formatted', () => {
+		const html = buildNotificationEmail('Powerball', 1000, 1700, 1500, 'Sat, Dec 27, 2025');
+
+		expect(html).toContain('Previous');
+		expect(html).toContain('$1.00 Billion');
+	});
+
+	it('displays current amount correctly formatted', () => {
+		const html = buildNotificationEmail('Mega Millions', 1000, 1700, 1500, 'Fri, Dec 26, 2025');
+
+		expect(html).toContain('Current');
+		expect(html).toContain('$1.70 Billion');
+	});
+
+	it('displays threshold correctly formatted', () => {
+		const html = buildNotificationEmail('Mega Millions', 1000, 1700, 1500, 'Fri, Dec 26, 2025');
+
+		expect(html).toContain('Your threshold');
+		expect(html).toContain('$1.50 Billion');
+	});
+
+	it('includes next drawing date', () => {
+		const html = buildNotificationEmail('Powerball', 1000, 1800, 1500, 'Saturday, Dec 28, 2025');
+
+		expect(html).toContain('Next drawing');
+		expect(html).toContain('Saturday, Dec 28, 2025');
+	});
+
+	it('formats amounts in millions correctly', () => {
+		const html = buildNotificationEmail('Mega Millions', 450, 650, 500, 'Fri, Dec 26, 2025');
+
+		expect(html).toContain('$450 Million');
+		expect(html).toContain('$650 Million');
+		expect(html).toContain('$500 Million');
+	});
+
+	it('formats amounts in billions correctly', () => {
+		const html = buildNotificationEmail('Powerball', 1500, 2000, 1800, 'Sat, Dec 27, 2025');
+
+		expect(html).toContain('$1.50 Billion');
+		expect(html).toContain('$2.00 Billion');
+		expect(html).toContain('$1.80 Billion');
+	});
+
+	it('includes automated notification footer', () => {
+		const html = buildNotificationEmail('Mega Millions', 1000, 1700, 1500, 'Fri, Dec 26, 2025');
+
+		expect(html).toContain('automated notification');
+		expect(html).toContain('LottoCheck');
+	});
+
+	it('includes CSS styling for email formatting', () => {
+		const html = buildNotificationEmail('Mega Millions', 1000, 1700, 1500, 'Fri, Dec 26, 2025');
+
+		expect(html).toContain('<style>');
+		expect(html).toContain('font-family');
+		expect(html).toContain('.container');
+	});
+
+	it('includes jackpot alert emoji/icon', () => {
+		const html = buildNotificationEmail('Powerball', 1000, 1700, 1500, 'Sat, Dec 27, 2025');
+
+		expect(html).toContain('🎰');
+		expect(html).toContain('Lottery Jackpot Alert');
+	});
+
+	it('handles very large jackpot amounts', () => {
+		const html = buildNotificationEmail('Mega Millions', 2500, 3500, 3000, 'Fri, Dec 26, 2025');
+
+		expect(html).toContain('$2.50 Billion');
+		expect(html).toContain('$3.50 Billion');
+		expect(html).toContain('$3.00 Billion');
+	});
+
+	describe('input validation', () => {
+		it('throws error when lotteryName is null', () => {
+			expect(() => buildNotificationEmail(null, 1000, 1700, 1500, 'Fri, Dec 26, 2025'))
+				.toThrow('lotteryName must be a non-empty string');
+		});
+
+		it('throws error when lotteryName is undefined', () => {
+			expect(() => buildNotificationEmail(undefined, 1000, 1700, 1500, 'Fri, Dec 26, 2025'))
+				.toThrow('lotteryName must be a non-empty string');
+		});
+
+		it('throws error when lotteryName is empty string', () => {
+			expect(() => buildNotificationEmail('', 1000, 1700, 1500, 'Fri, Dec 26, 2025'))
+				.toThrow('lotteryName must be a non-empty string');
+		});
+
+		it('throws error when lotteryName is not a string', () => {
+			expect(() => buildNotificationEmail(123, 1000, 1700, 1500, 'Fri, Dec 26, 2025'))
+				.toThrow('lotteryName must be a non-empty string');
+		});
+
+		it('throws error when previousAmount is not a number', () => {
+			expect(() => buildNotificationEmail('Mega Millions', 'invalid', 1700, 1500, 'Fri, Dec 26, 2025'))
+				.toThrow('previousAmount must be a valid number');
+		});
+
+		it('throws error when previousAmount is NaN', () => {
+			expect(() => buildNotificationEmail('Mega Millions', NaN, 1700, 1500, 'Fri, Dec 26, 2025'))
+				.toThrow('previousAmount must be a valid number');
+		});
+
+		it('throws error when currentAmount is not a number', () => {
+			expect(() => buildNotificationEmail('Mega Millions', 1000, 'invalid', 1500, 'Fri, Dec 26, 2025'))
+				.toThrow('currentAmount must be a valid number');
+		});
+
+		it('throws error when currentAmount is NaN', () => {
+			expect(() => buildNotificationEmail('Mega Millions', 1000, NaN, 1500, 'Fri, Dec 26, 2025'))
+				.toThrow('currentAmount must be a valid number');
+		});
+
+		it('throws error when threshold is not a number', () => {
+			expect(() => buildNotificationEmail('Mega Millions', 1000, 1700, 'invalid', 'Fri, Dec 26, 2025'))
+				.toThrow('threshold must be a valid number');
+		});
+
+		it('throws error when threshold is NaN', () => {
+			expect(() => buildNotificationEmail('Mega Millions', 1000, 1700, NaN, 'Fri, Dec 26, 2025'))
+				.toThrow('threshold must be a valid number');
+		});
+
+		it('throws error when nextDrawing is null', () => {
+			expect(() => buildNotificationEmail('Mega Millions', 1000, 1700, 1500, null))
+				.toThrow('nextDrawing must be a non-empty string');
+		});
+
+		it('throws error when nextDrawing is undefined', () => {
+			expect(() => buildNotificationEmail('Mega Millions', 1000, 1700, 1500, undefined))
+				.toThrow('nextDrawing must be a non-empty string');
+		});
+
+		it('throws error when nextDrawing is empty string', () => {
+			expect(() => buildNotificationEmail('Mega Millions', 1000, 1700, 1500, ''))
+				.toThrow('nextDrawing must be a non-empty string');
+		});
+
+		it('throws error when nextDrawing is not a string', () => {
+			expect(() => buildNotificationEmail('Mega Millions', 1000, 1700, 1500, 123))
+				.toThrow('nextDrawing must be a non-empty string');
+		});
+	});
+});
+
+describe('sendEmail', () => {
+	it('successfully sends email when API responds with OK', async () => {
+		const mockFetch = vi.fn().mockResolvedValue({
+			ok: true,
+			status: 200
+		});
+		global.fetch = mockFetch;
+
+		const result = await sendEmail(
+			'from@example.com',
+			'to@example.com',
+			'Test Subject',
+			'<html>Test Body</html>'
+		);
+
+		expect(result.success).toBe(true);
+		expect(result.error).toBeUndefined();
+		expect(mockFetch).toHaveBeenCalledTimes(1);
+	});
+
+	it('calls MailChannels API with correct endpoint', async () => {
+		const mockFetch = vi.fn().mockResolvedValue({
+			ok: true,
+			status: 200
+		});
+		global.fetch = mockFetch;
+
+		await sendEmail(
+			'from@example.com',
+			'to@example.com',
+			'Test Subject',
+			'<html>Test</html>'
+		);
+
+		expect(mockFetch).toHaveBeenCalledWith(
+			'https://api.mailchannels.net/tx/v1/send',
+			expect.any(Object)
+		);
+	});
+
+	it('sends correct email structure to MailChannels', async () => {
+		const mockFetch = vi.fn().mockResolvedValue({
+			ok: true,
+			status: 200
+		});
+		global.fetch = mockFetch;
+
+		await sendEmail(
+			'sender@domain.com',
+			'recipient@domain.com',
+			'Jackpot Alert',
+			'<html>Email Content</html>'
+		);
+
+		const callArgs = mockFetch.mock.calls[0][1];
+		expect(callArgs.method).toBe('POST');
+		expect(callArgs.headers['Content-Type']).toBe('application/json');
+
+		const body = JSON.parse(callArgs.body);
+		expect(body.personalizations[0].to[0].email).toBe('recipient@domain.com');
+		expect(body.from.email).toBe('sender@domain.com');
+		expect(body.subject).toBe('Jackpot Alert');
+		expect(body.content[0].type).toBe('text/html');
+		expect(body.content[0].value).toBe('<html>Email Content</html>');
+	});
+
+	it('returns error when API responds with error status', async () => {
+		const mockFetch = vi.fn().mockResolvedValue({
+			ok: false,
+			status: 500,
+			statusText: 'Internal Server Error',
+			text: () => Promise.resolve('Server error details')
+		});
+		global.fetch = mockFetch;
+
+		const result = await sendEmail(
+			'from@example.com',
+			'to@example.com',
+			'Test',
+			'<html>Test</html>'
+		);
+
+		expect(result.success).toBe(false);
+		expect(result.error).toContain('MailChannels API error');
+		expect(result.error).toContain('500');
+		expect(result.error).toContain('Internal Server Error');
+	});
+
+	it('handles network errors gracefully', async () => {
+		const mockFetch = vi.fn().mockRejectedValue(new Error('Network timeout'));
+		global.fetch = mockFetch;
+
+		const result = await sendEmail(
+			'from@example.com',
+			'to@example.com',
+			'Test',
+			'<html>Test</html>'
+		);
+
+		expect(result.success).toBe(false);
+		expect(result.error).toContain('Email send failed');
+		expect(result.error).toContain('Network timeout');
+	});
+
+	it('handles API authentication errors (401)', async () => {
+		const mockFetch = vi.fn().mockResolvedValue({
+			ok: false,
+			status: 401,
+			statusText: 'Unauthorized',
+			text: () => Promise.resolve('Invalid credentials')
+		});
+		global.fetch = mockFetch;
+
+		const result = await sendEmail(
+			'from@example.com',
+			'to@example.com',
+			'Test',
+			'<html>Test</html>'
+		);
+
+		expect(result.success).toBe(false);
+		expect(result.error).toContain('401');
+		expect(result.error).toContain('Unauthorized');
+	});
+
+	it('handles API rate limiting errors (429)', async () => {
+		const mockFetch = vi.fn().mockResolvedValue({
+			ok: false,
+			status: 429,
+			statusText: 'Too Many Requests',
+			text: () => Promise.resolve('Rate limit exceeded')
+		});
+		global.fetch = mockFetch;
+
+		const result = await sendEmail(
+			'from@example.com',
+			'to@example.com',
+			'Test',
+			'<html>Test</html>'
+		);
+
+		expect(result.success).toBe(false);
+		expect(result.error).toContain('429');
+		expect(result.error).toContain('Rate limit exceeded');
+	});
+
+	it('includes error response body in error message', async () => {
+		const mockFetch = vi.fn().mockResolvedValue({
+			ok: false,
+			status: 400,
+			statusText: 'Bad Request',
+			text: () => Promise.resolve('Invalid email format')
+		});
+		global.fetch = mockFetch;
+
+		const result = await sendEmail(
+			'invalid-email',
+			'to@example.com',
+			'Test',
+			'<html>Test</html>'
+		);
+
+		expect(result.success).toBe(false);
+		expect(result.error).toContain('Invalid email format');
+	});
+
+	it('handles fetch throwing non-Error objects', async () => {
+		const mockFetch = vi.fn().mockRejectedValue('String error');
+		global.fetch = mockFetch;
+
+		const result = await sendEmail(
+			'from@example.com',
+			'to@example.com',
+			'Test',
+			'<html>Test</html>'
+		);
+
+		expect(result.success).toBe(false);
+		expect(result.error).toBeDefined();
+	});
+
+	it('handles response.text() throwing an error', async () => {
+		const mockFetch = vi.fn().mockResolvedValue({
+			ok: false,
+			status: 500,
+			statusText: 'Internal Server Error',
+			text: () => Promise.reject(new Error('Failed to read response'))
+		});
+		global.fetch = mockFetch;
+
+		const result = await sendEmail(
+			'from@example.com',
+			'to@example.com',
+			'Test',
+			'<html>Test</html>'
+		);
+
+		expect(result.success).toBe(false);
+		expect(result.error).toContain('MailChannels API error');
+		expect(result.error).toContain('500');
+		expect(result.error).toContain('(unable to read error response)');
+	});
+});
+
+describe('isEmailConfigured', () => {
+	it('returns true when both FROM_EMAIL and TO_EMAIL are set', () => {
+		const mockEnv = {
+			FROM_EMAIL: 'from@example.com',
+			TO_EMAIL: 'to@example.com'
+		};
+
+		expect(isEmailConfigured(mockEnv)).toBe(true);
+	});
+
+	it('returns false when FROM_EMAIL is missing', () => {
+		const mockEnv = {
+			TO_EMAIL: 'to@example.com'
+		};
+
+		expect(isEmailConfigured(mockEnv)).toBe(false);
+	});
+
+	it('returns false when TO_EMAIL is missing', () => {
+		const mockEnv = {
+			FROM_EMAIL: 'from@example.com'
+		};
+
+		expect(isEmailConfigured(mockEnv)).toBe(false);
+	});
+
+	it('returns false when both emails are missing', () => {
+		const mockEnv = {};
+
+		expect(isEmailConfigured(mockEnv)).toBe(false);
+	});
+
+	it('returns false when env is undefined', () => {
+		expect(isEmailConfigured(undefined)).toBe(false);
+	});
+
+	it('returns false when env is null', () => {
+		expect(isEmailConfigured(null)).toBe(false);
+	});
+
+	it('returns false when FROM_EMAIL is empty string', () => {
+		const mockEnv = {
+			FROM_EMAIL: '',
+			TO_EMAIL: 'to@example.com'
+		};
+
+		expect(isEmailConfigured(mockEnv)).toBe(false);
+	});
+
+	it('returns false when TO_EMAIL is empty string', () => {
+		const mockEnv = {
+			FROM_EMAIL: 'from@example.com',
+			TO_EMAIL: ''
+		};
+
+		expect(isEmailConfigured(mockEnv)).toBe(false);
 	});
 });

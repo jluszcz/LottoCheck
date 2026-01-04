@@ -1,0 +1,8 @@
+# Local development environment variables
+# Copy this file to .dev.vars and update with your actual values
+# .dev.vars is in .gitignore and won't be committed
+
+# Email configuration for MailChannels notifications
+# These are used for sending jackpot alerts when thresholds are crossed
+FROM_EMAIL=alerts@yourdomain.com
+TO_EMAIL=your-email@example.com

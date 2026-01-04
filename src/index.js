@@ -10,6 +10,231 @@ const DEFAULT_THRESHOLD_MILLIONS = 1500;
 const BILLION_IN_MILLIONS = 1000;
 
 /**
+ * Get threshold from environment or use default
+ * @param {object} env - Environment variables
+ * @returns {number} Threshold amount in millions
+ */
+export function getThreshold(env) {
+	const parsed = parseFloat(env?.JACKPOT_THRESHOLD);
+	return !isNaN(parsed) && parsed > 0 ? parsed : DEFAULT_THRESHOLD_MILLIONS;
+}
+
+/**
+ * Get previous jackpot amount from KV storage
+ * @param {KVNamespace} kv - CloudFlare KV namespace
+ * @param {string} lotteryName - "Mega Millions" or "Powerball"
+ * @returns {Promise<number>} Previous jackpot amount in millions (0 if not found)
+ */
+export async function getPreviousJackpot(kv, lotteryName) {
+	// Handle undefined KV (local dev, tests without KV binding)
+	if (!kv) {
+		return 0;
+	}
+
+	try {
+		const stored = await kv.get(lotteryName);
+
+		// Return 0 if no previous state exists
+		if (!stored) {
+			return 0;
+		}
+
+		// Parse stored JSON
+		const data = JSON.parse(stored);
+		return data.jackpotAmount || 0;
+
+	} catch (error) {
+		// Log error but return 0 to allow processing to continue
+		console.error(`Error reading previous jackpot for ${lotteryName}:`, error.message);
+		return 0;
+	}
+}
+
+/**
+ * Store current jackpot amount in KV storage
+ * @param {KVNamespace} kv - CloudFlare KV namespace
+ * @param {string} lotteryName - "Mega Millions" or "Powerball"
+ * @param {number} jackpotAmount - Current jackpot amount in millions
+ * @returns {Promise<void>}
+ */
+export async function storePreviousJackpot(kv, lotteryName, jackpotAmount) {
+	// Handle undefined KV (local dev, tests without KV binding)
+	if (!kv) {
+		return;
+	}
+
+	try {
+		const data = {
+			jackpotAmount,
+			lastChecked: new Date().toISOString()
+		};
+
+		await kv.put(lotteryName, JSON.stringify(data));
+
+	} catch (error) {
+		// Log error but don't throw - storage failure shouldn't crash the worker
+		console.error(`Error storing jackpot for ${lotteryName}:`, error.message);
+	}
+}
+
+/**
+ * @typedef {Object} ThresholdCrossingInfo
+ * @property {boolean} crossed - Whether threshold was crossed (below→above)
+ * @property {number} previousAmount - Previous jackpot amount in millions
+ * @property {number} currentAmount - Current jackpot amount in millions
+ * @property {number} threshold - Threshold in millions
+ */
+
+/**
+ * Detect if jackpot crossed threshold (was below, now above)
+ * @param {number} previousAmount - Previous jackpot amount in millions
+ * @param {number} currentAmount - Current jackpot amount in millions
+ * @param {number} thresholdMillions - Threshold in millions
+ * @returns {ThresholdCrossingInfo} Crossing detection result
+ */
+export function detectThresholdCrossing(previousAmount, currentAmount, thresholdMillions) {
+	// Validate inputs
+	if (typeof previousAmount !== 'number' || isNaN(previousAmount)) {
+		throw new Error('previousAmount must be a valid number');
+	}
+	if (typeof currentAmount !== 'number' || isNaN(currentAmount)) {
+		throw new Error('currentAmount must be a valid number');
+	}
+	if (typeof thresholdMillions !== 'number' || isNaN(thresholdMillions)) {
+		throw new Error('thresholdMillions must be a valid number');
+	}
+
+	// Return crossing info with crossed=true ONLY when:
+	// - previousAmount < threshold AND currentAmount >= threshold
+	// This ensures we only notify on the upward crossing, not when it stays above
+	const crossed = previousAmount < thresholdMillions && currentAmount >= thresholdMillions;
+
+	return {
+		crossed,
+		previousAmount,
+		currentAmount,
+		threshold: thresholdMillions
+	};
+}
+
+/**
+ * Build email HTML for threshold crossing notification
+ * @param {string} lotteryName - Name of lottery
+ * @param {number} previousAmount - Previous amount in millions
+ * @param {number} currentAmount - Current amount in millions
+ * @param {number} threshold - Threshold in millions
+ * @param {string} nextDrawing - Next drawing date string
+ * @returns {string} HTML email body
+ */
+export function buildNotificationEmail(lotteryName, previousAmount, currentAmount, threshold, nextDrawing) {
+	// Validate inputs
+	if (!lotteryName || typeof lotteryName !== 'string') {
+		throw new Error('lotteryName must be a non-empty string');
+	}
+	if (typeof previousAmount !== 'number' || isNaN(previousAmount)) {
+		throw new Error('previousAmount must be a valid number');
+	}
+	if (typeof currentAmount !== 'number' || isNaN(currentAmount)) {
+		throw new Error('currentAmount must be a valid number');
+	}
+	if (typeof threshold !== 'number' || isNaN(threshold)) {
+		throw new Error('threshold must be a valid number');
+	}
+	if (!nextDrawing || typeof nextDrawing !== 'string') {
+		throw new Error('nextDrawing must be a non-empty string');
+	}
+
+	const previousDisplay = formatJackpotDisplay(previousAmount);
+	const currentDisplay = formatJackpotDisplay(currentAmount);
+	const thresholdDisplay = formatJackpotDisplay(threshold);
+
+	return `
+<!DOCTYPE html>
+<html>
+<head>
+	<meta charset="UTF-8">
+	<style>
+		body { font-family: Arial, sans-serif; line-height: 1.6; color: #333; }
+		.container { max-width: 600px; margin: 0 auto; padding: 20px; }
+		h2 { color: #2c3e50; }
+		ul { background: #f4f4f4; padding: 20px; border-radius: 5px; }
+		li { margin: 10px 0; }
+		.footer { margin-top: 20px; font-size: 0.9em; color: #666; }
+	</style>
+</head>
+<body>
+	<div class="container">
+		<h2>🎰 Lottery Jackpot Alert!</h2>
+		<p><strong>${lotteryName}</strong> has crossed your threshold!</p>
+		<ul>
+			<li><strong>Previous:</strong> ${previousDisplay}</li>
+			<li><strong>Current:</strong> ${currentDisplay}</li>
+			<li><strong>Your threshold:</strong> ${thresholdDisplay}</li>
+			<li><strong>Next drawing:</strong> ${nextDrawing}</li>
+		</ul>
+		<p class="footer">This is an automated notification from LottoCheck.</p>
+	</div>
+</body>
+</html>
+`.trim();
+}
+
+/**
+ * Check if email configuration is valid
+ * @param {Object} env - Environment object
+ * @returns {boolean} True if both FROM_EMAIL and TO_EMAIL are configured
+ */
+export function isEmailConfigured(env) {
+	return !!(env?.FROM_EMAIL && env?.TO_EMAIL);
+}
+
+/**
+ * Send email notification via MailChannels
+ * @param {string} fromEmail - Sender email (env.FROM_EMAIL)
+ * @param {string} toEmail - Recipient email (env.TO_EMAIL)
+ * @param {string} subject - Email subject
+ * @param {string} htmlBody - HTML email body
+ * @returns {Promise<{success: boolean, error?: string}>} Send result
+ */
+export async function sendEmail(fromEmail, toEmail, subject, htmlBody) {
+	try {
+		const response = await fetch('https://api.mailchannels.net/tx/v1/send', {
+			method: 'POST',
+			headers: {
+				'Content-Type': 'application/json'
+			},
+			body: JSON.stringify({
+				personalizations: [{
+					to: [{ email: toEmail }]
+				}],
+				from: { email: fromEmail },
+				subject: subject,
+				content: [{
+					type: 'text/html',
+					value: htmlBody
+				}]
+			})
+		});
+
+		if (response.ok) {
+			return { success: true };
+		} else {
+			const errorText = await response.text().catch(() => '(unable to read error response)');
+			return {
+				success: false,
+				error: `MailChannels API error: ${response.status} ${response.statusText} - ${errorText}`
+			};
+		}
+
+	} catch (error) {
+		return {
+			success: false,
+			error: `Email send failed: ${error.message}`
+		};
+	}
+}
+
+/**
  * @typedef {Object} LotteryResult
  * @property {string} lottery - Name of the lottery ("Mega Millions" or "Powerball")
  * @property {string} jackpot - Formatted jackpot display string (e.g., "$1.70 Billion")
@@ -84,27 +309,114 @@ export default {
 	 * @param {ScheduledController} controller
 	 * @param {object} env - Environment variables
 	 * @param {ExecutionContext} ctx
-	 * @returns {Promise<void>} Logs jackpot data to console
+	 * @returns {Promise<void>} Logs jackpot data and sends notifications on threshold crossing
 	 */
 	async scheduled(controller, env, ctx) {
 		console.log('LottoCheck: Starting jackpot check at', new Date().toISOString());
 
 		try {
-			// Check both lotteries in parallel
+			// 1. Fetch current jackpots (parallel)
 			const [megaMillions, powerball] = await Promise.all([
 				checkMegaMillions(),
 				checkPowerball()
 			]);
 
-			// Check against threshold and annotate results
-			const results = checkThresholds(megaMillions, powerball, env);
+			// 2. Get previous amounts from KV (parallel)
+			const [prevMega, prevPowerball] = await Promise.all([
+				getPreviousJackpot(env.LOTTERY_STATE, 'Mega Millions'),
+				getPreviousJackpot(env.LOTTERY_STATE, 'Powerball')
+			]);
 
-			// Log results
+			// 3. Get threshold amount
+			const thresholdMillions = getThreshold(env);
+
+			// 4. Detect crossings for each lottery
+			const megaCrossing = detectThresholdCrossing(
+				prevMega,
+				megaMillions.jackpotAmount,
+				thresholdMillions
+			);
+			const powerballCrossing = detectThresholdCrossing(
+				prevPowerball,
+				powerball.jackpotAmount,
+				thresholdMillions
+			);
+
+			// 5. Send email notifications if crossed (parallel)
+			const notifications = [];
+
+			if (megaCrossing.crossed && !megaMillions.error && isEmailConfigured(env)) {
+				const html = buildNotificationEmail(
+					'Mega Millions',
+					prevMega,
+					megaMillions.jackpotAmount,
+					thresholdMillions,
+					megaMillions.nextDrawing
+				);
+				notifications.push(
+					sendEmail(
+						env.FROM_EMAIL,
+						env.TO_EMAIL,
+						'🎰 Mega Millions Jackpot Alert!',
+						html
+					).then(result => ({ lottery: 'Mega Millions', ...result }))
+				);
+			}
+
+			if (powerballCrossing.crossed && !powerball.error && isEmailConfigured(env)) {
+				const html = buildNotificationEmail(
+					'Powerball',
+					prevPowerball,
+					powerball.jackpotAmount,
+					thresholdMillions,
+					powerball.nextDrawing
+				);
+				notifications.push(
+					sendEmail(
+						env.FROM_EMAIL,
+						env.TO_EMAIL,
+						'🎰 Powerball Jackpot Alert!',
+						html
+					).then(result => ({ lottery: 'Powerball', ...result }))
+				);
+			}
+
+			// Send email notifications and wait for completion
+			// CRITICAL: Must await emails before storing in KV to prevent race condition
+			// If we store before emails send, failed emails won't retry on next run
+			const emailResults = await Promise.all(notifications);
+			emailResults.forEach((result) => {
+				if (result.success) {
+					console.log(`Email sent successfully for ${result.lottery}`);
+				} else {
+					console.error(`Email failed for ${result.lottery}:`, result.error);
+				}
+			});
+
+			// 6. Store current amounts in KV for next run (always, even if errors)
+			// Use ctx.waitUntil() to ensure KV operations complete even after handler returns
+			// Safe to use ctx.waitUntil here because emails have already completed
+			ctx.waitUntil(Promise.all([
+				storePreviousJackpot(env.LOTTERY_STATE, 'Mega Millions', megaMillions.jackpotAmount),
+				storePreviousJackpot(env.LOTTERY_STATE, 'Powerball', powerball.jackpotAmount)
+			]));
+
+			// 7. Log results
+			// Build annotated results for logging
+			const results = checkThresholds(megaMillions, powerball, env);
 			console.log('Mega Millions:', results.megaMillions);
 			console.log('Powerball:', results.powerball);
 			console.log('Threshold:', results.threshold);
 
-			// Log alert if any lottery exceeds threshold
+			// Log threshold crossings
+			if (megaCrossing.crossed) {
+				console.log(`THRESHOLD CROSSED: Mega Millions went from ${prevMega}M to ${megaMillions.jackpotAmount}M`);
+			}
+			if (powerballCrossing.crossed) {
+				console.log(`THRESHOLD CROSSED: Powerball went from ${prevPowerball}M to ${powerball.jackpotAmount}M`);
+			}
+
+			// Log alert if any lottery exceeds threshold (existing behavior)
 			if (results.threshold.exceeded) {
 				console.log(`ALERT: ${results.threshold.exceedingLotteries.join(' and ')} exceeded threshold of ${results.threshold.display}`);
 			}
@@ -137,10 +449,7 @@ function formatJackpotDisplay(amountInMillions) {
  */
 function checkThresholds(megaMillions, powerball, env) {
 	// Get threshold from environment or use default
-	const parsed = parseFloat(env?.JACKPOT_THRESHOLD);
-	const thresholdMillions = !isNaN(parsed) && parsed > 0
-		? parsed
-		: DEFAULT_THRESHOLD_MILLIONS;
+	const thresholdMillions = getThreshold(env);
 
 	// Check each lottery against threshold (only if no error and valid number)
 	const megaExceeds = !megaMillions.error &&
@@ -256,9 +565,15 @@ async function checkPowerball() {
 		}
 
 		// Extract next drawing date
+		// Handles both formats:
+		// - Abbreviated: "Mon, Jan 5, 2026"
+		// - Full: "Monday, January 5, 2026"
+		// Note: Must match "Next Drawing" to avoid matching past drawing dates
 		const drawingPatterns = [
-			/Next Drawing[^:]*:\s*([A-Za-z]+,\s*[A-Za-z]+\s*\d+,\s*\d{4})/i,
-			/([A-Za-z]+,\s*[A-Za-z]+\s*\d+,\s*\d{4})/i
+			/Next Drawing[^>]*>[\s\S]{0,100}?([A-Za-z]{3},\s*[A-Za-z]{3}\s*\d{1,2},\s*\d{4})/i, // Abbreviated with tags/whitespace
+			/Next Drawing[^:]*:\s*([A-Za-z]{3},\s*[A-Za-z]{3}\s*\d{1,2},\s*\d{4})/i,           // Abbreviated with colon
+			/Next Drawing[^:]*:\s*([A-Za-z]+,\s*[A-Za-z]+\s*\d+,\s*\d{4})/i,                   // Full format with colon
+			/Next Drawing[\s\S]{0,100}?([A-Za-z]{3},\s*[A-Za-z]{3}\s*\d{1,2},\s*\d{4})/i     // Abbreviated (flexible whitespace)
 		];
 
 		let nextDrawing = null;
