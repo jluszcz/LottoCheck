@@ -377,10 +377,11 @@ export default {
 			});
 
 			// 6. Store current amounts in KV for next run (always, even if errors)
-			await Promise.all([
+			// Use ctx.waitUntil() to ensure KV operations complete even after handler returns
+			ctx.waitUntil(Promise.all([
 				storePreviousJackpot(env.LOTTERY_STATE, 'Mega Millions', megaMillions.jackpotAmount),
 				storePreviousJackpot(env.LOTTERY_STATE, 'Powerball', powerball.jackpotAmount)
-			]);
+			]));
 
 			// 7. Log results
 			console.log('Mega Millions:', results.megaMillions);
