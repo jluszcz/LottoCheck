@@ -1,6 +1,6 @@
 import { env, createExecutionContext, waitOnExecutionContext, SELF } from 'cloudflare:test';
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import worker, { detectThresholdCrossing, buildNotificationEmail, sendEmail, isEmailConfigured } from './index.js';
+import worker, { getThreshold, detectThresholdCrossing, buildNotificationEmail, sendEmail, isEmailConfigured } from './index.js';
 
 /**
  * Test suite for LottoCheck CloudFlare Worker
@@ -611,6 +611,51 @@ describe('Threshold checking', () => {
 		expect(data.powerball.exceedsThreshold).toBe(false);
 		expect(data.threshold.exceeded).toBe(false);
 		expect(data.threshold.exceedingLotteries).toHaveLength(0);
+	});
+});
+
+describe('getThreshold', () => {
+	it('returns threshold from env when valid', () => {
+		const env = { JACKPOT_THRESHOLD: '2000' };
+		expect(getThreshold(env)).toBe(2000);
+	});
+
+	it('returns default threshold when env is undefined', () => {
+		expect(getThreshold(undefined)).toBe(1500);
+	});
+
+	it('returns default threshold when env is empty object', () => {
+		expect(getThreshold({})).toBe(1500);
+	});
+
+	it('returns default threshold when JACKPOT_THRESHOLD is missing', () => {
+		const env = { OTHER_VAR: 'value' };
+		expect(getThreshold(env)).toBe(1500);
+	});
+
+	it('returns default threshold when JACKPOT_THRESHOLD is not a number', () => {
+		const env = { JACKPOT_THRESHOLD: 'invalid' };
+		expect(getThreshold(env)).toBe(1500);
+	});
+
+	it('returns default threshold when JACKPOT_THRESHOLD is empty string', () => {
+		const env = { JACKPOT_THRESHOLD: '' };
+		expect(getThreshold(env)).toBe(1500);
+	});
+
+	it('returns default threshold when JACKPOT_THRESHOLD is zero', () => {
+		const env = { JACKPOT_THRESHOLD: '0' };
+		expect(getThreshold(env)).toBe(1500);
+	});
+
+	it('returns default threshold when JACKPOT_THRESHOLD is negative', () => {
+		const env = { JACKPOT_THRESHOLD: '-500' };
+		expect(getThreshold(env)).toBe(1500);
+	});
+
+	it('handles float values correctly', () => {
+		const env = { JACKPOT_THRESHOLD: '1750.5' };
+		expect(getThreshold(env)).toBe(1750.5);
 	});
 });
 

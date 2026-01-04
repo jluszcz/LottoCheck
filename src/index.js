@@ -10,6 +10,16 @@ const DEFAULT_THRESHOLD_MILLIONS = 1500;
 const BILLION_IN_MILLIONS = 1000;
 
 /**
+ * Get threshold from environment or use default
+ * @param {object} env - Environment variables
+ * @returns {number} Threshold amount in millions
+ */
+export function getThreshold(env) {
+	const parsed = parseFloat(env?.JACKPOT_THRESHOLD);
+	return !isNaN(parsed) && parsed > 0 ? parsed : DEFAULT_THRESHOLD_MILLIONS;
+}
+
+/**
  * Get previous jackpot amount from KV storage
  * @param {KVNamespace} kv - CloudFlare KV namespace
  * @param {string} lotteryName - "Mega Millions" or "Powerball"
@@ -317,9 +327,8 @@ export default {
 				getPreviousJackpot(env.LOTTERY_STATE, 'Powerball')
 			]);
 
-			// 3. Check against threshold and annotate results
-			const results = checkThresholds(megaMillions, powerball, env);
-			const thresholdMillions = results.threshold.amount;
+			// 3. Get threshold amount
+			const thresholdMillions = getThreshold(env);
 
 			// 4. Detect crossings for each lottery
 			const megaCrossing = detectThresholdCrossing(
@@ -393,6 +402,8 @@ export default {
 			]));
 
 			// 7. Log results
+			// Build annotated results for logging
+			const results = checkThresholds(megaMillions, powerball, env);
 			console.log('Mega Millions:', results.megaMillions);
 			console.log('Powerball:', results.powerball);
 			console.log('Threshold:', results.threshold);
@@ -438,10 +449,7 @@ function formatJackpotDisplay(amountInMillions) {
  */
 function checkThresholds(megaMillions, powerball, env) {
 	// Get threshold from environment or use default
-	const parsed = parseFloat(env?.JACKPOT_THRESHOLD);
-	const thresholdMillions = !isNaN(parsed) && parsed > 0
-		? parsed
-		: DEFAULT_THRESHOLD_MILLIONS;
+	const thresholdMillions = getThreshold(env);
 
 	// Check each lottery against threshold (only if no error and valid number)
 	const megaExceeds = !megaMillions.error &&
