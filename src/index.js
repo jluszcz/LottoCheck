@@ -366,15 +366,19 @@ export default {
 				);
 			}
 
-			// Wait for notifications to send
-			const emailResults = await Promise.all(notifications);
-			emailResults.forEach((result) => {
-				if (result.success) {
-					console.log(`Email sent successfully for ${result.lottery}`);
-				} else {
-					console.error(`Email failed for ${result.lottery}:`, result.error);
-				}
-			});
+			// Send email notifications in background (fire-and-forget)
+			// Use ctx.waitUntil() to ensure emails send even after handler returns
+			ctx.waitUntil(
+				Promise.all(notifications).then((emailResults) => {
+					emailResults.forEach((result) => {
+						if (result.success) {
+							console.log(`Email sent successfully for ${result.lottery}`);
+						} else {
+							console.error(`Email failed for ${result.lottery}:`, result.error);
+						}
+					});
+				})
+			);
 
 			// 6. Store current amounts in KV for next run (always, even if errors)
 			// Use ctx.waitUntil() to ensure KV operations complete even after handler returns
