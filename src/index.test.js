@@ -1,6 +1,6 @@
 import { env, createExecutionContext, waitOnExecutionContext, SELF } from 'cloudflare:test';
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import worker, { detectThresholdCrossing, buildNotificationEmail, sendEmail } from './index.js';
+import worker, { detectThresholdCrossing, buildNotificationEmail, sendEmail, isEmailConfigured } from './index.js';
 
 /**
  * Test suite for LottoCheck CloudFlare Worker
@@ -1164,6 +1164,78 @@ describe('buildNotificationEmail', () => {
 		expect(html).toContain('$3.50 Billion');
 		expect(html).toContain('$3.00 Billion');
 	});
+
+	describe('input validation', () => {
+		it('throws error when lotteryName is null', () => {
+			expect(() => buildNotificationEmail(null, 1000, 1700, 1500, 'Fri, Dec 26, 2025'))
+				.toThrow('lotteryName must be a non-empty string');
+		});
+
+		it('throws error when lotteryName is undefined', () => {
+			expect(() => buildNotificationEmail(undefined, 1000, 1700, 1500, 'Fri, Dec 26, 2025'))
+				.toThrow('lotteryName must be a non-empty string');
+		});
+
+		it('throws error when lotteryName is empty string', () => {
+			expect(() => buildNotificationEmail('', 1000, 1700, 1500, 'Fri, Dec 26, 2025'))
+				.toThrow('lotteryName must be a non-empty string');
+		});
+
+		it('throws error when lotteryName is not a string', () => {
+			expect(() => buildNotificationEmail(123, 1000, 1700, 1500, 'Fri, Dec 26, 2025'))
+				.toThrow('lotteryName must be a non-empty string');
+		});
+
+		it('throws error when previousAmount is not a number', () => {
+			expect(() => buildNotificationEmail('Mega Millions', 'invalid', 1700, 1500, 'Fri, Dec 26, 2025'))
+				.toThrow('previousAmount must be a valid number');
+		});
+
+		it('throws error when previousAmount is NaN', () => {
+			expect(() => buildNotificationEmail('Mega Millions', NaN, 1700, 1500, 'Fri, Dec 26, 2025'))
+				.toThrow('previousAmount must be a valid number');
+		});
+
+		it('throws error when currentAmount is not a number', () => {
+			expect(() => buildNotificationEmail('Mega Millions', 1000, 'invalid', 1500, 'Fri, Dec 26, 2025'))
+				.toThrow('currentAmount must be a valid number');
+		});
+
+		it('throws error when currentAmount is NaN', () => {
+			expect(() => buildNotificationEmail('Mega Millions', 1000, NaN, 1500, 'Fri, Dec 26, 2025'))
+				.toThrow('currentAmount must be a valid number');
+		});
+
+		it('throws error when threshold is not a number', () => {
+			expect(() => buildNotificationEmail('Mega Millions', 1000, 1700, 'invalid', 'Fri, Dec 26, 2025'))
+				.toThrow('threshold must be a valid number');
+		});
+
+		it('throws error when threshold is NaN', () => {
+			expect(() => buildNotificationEmail('Mega Millions', 1000, 1700, NaN, 'Fri, Dec 26, 2025'))
+				.toThrow('threshold must be a valid number');
+		});
+
+		it('throws error when nextDrawing is null', () => {
+			expect(() => buildNotificationEmail('Mega Millions', 1000, 1700, 1500, null))
+				.toThrow('nextDrawing must be a non-empty string');
+		});
+
+		it('throws error when nextDrawing is undefined', () => {
+			expect(() => buildNotificationEmail('Mega Millions', 1000, 1700, 1500, undefined))
+				.toThrow('nextDrawing must be a non-empty string');
+		});
+
+		it('throws error when nextDrawing is empty string', () => {
+			expect(() => buildNotificationEmail('Mega Millions', 1000, 1700, 1500, ''))
+				.toThrow('nextDrawing must be a non-empty string');
+		});
+
+		it('throws error when nextDrawing is not a string', () => {
+			expect(() => buildNotificationEmail('Mega Millions', 1000, 1700, 1500, 123))
+				.toThrow('nextDrawing must be a non-empty string');
+		});
+	});
 });
 
 describe('sendEmail', () => {
@@ -1345,5 +1417,86 @@ describe('sendEmail', () => {
 
 		expect(result.success).toBe(false);
 		expect(result.error).toBeDefined();
+	});
+
+	it('handles response.text() throwing an error', async () => {
+		const mockFetch = vi.fn().mockResolvedValue({
+			ok: false,
+			status: 500,
+			statusText: 'Internal Server Error',
+			text: () => Promise.reject(new Error('Failed to read response'))
+		});
+		global.fetch = mockFetch;
+
+		const result = await sendEmail(
+			'from@example.com',
+			'to@example.com',
+			'Test',
+			'<html>Test</html>'
+		);
+
+		expect(result.success).toBe(false);
+		expect(result.error).toContain('MailChannels API error');
+		expect(result.error).toContain('500');
+		expect(result.error).toContain('(unable to read error response)');
+	});
+});
+
+describe('isEmailConfigured', () => {
+	it('returns true when both FROM_EMAIL and TO_EMAIL are set', () => {
+		const mockEnv = {
+			FROM_EMAIL: 'from@example.com',
+			TO_EMAIL: 'to@example.com'
+		};
+
+		expect(isEmailConfigured(mockEnv)).toBe(true);
+	});
+
+	it('returns false when FROM_EMAIL is missing', () => {
+		const mockEnv = {
+			TO_EMAIL: 'to@example.com'
+		};
+
+		expect(isEmailConfigured(mockEnv)).toBe(false);
+	});
+
+	it('returns false when TO_EMAIL is missing', () => {
+		const mockEnv = {
+			FROM_EMAIL: 'from@example.com'
+		};
+
+		expect(isEmailConfigured(mockEnv)).toBe(false);
+	});
+
+	it('returns false when both emails are missing', () => {
+		const mockEnv = {};
+
+		expect(isEmailConfigured(mockEnv)).toBe(false);
+	});
+
+	it('returns false when env is undefined', () => {
+		expect(isEmailConfigured(undefined)).toBe(false);
+	});
+
+	it('returns false when env is null', () => {
+		expect(isEmailConfigured(null)).toBe(false);
+	});
+
+	it('returns false when FROM_EMAIL is empty string', () => {
+		const mockEnv = {
+			FROM_EMAIL: '',
+			TO_EMAIL: 'to@example.com'
+		};
+
+		expect(isEmailConfigured(mockEnv)).toBe(false);
+	});
+
+	it('returns false when TO_EMAIL is empty string', () => {
+		const mockEnv = {
+			FROM_EMAIL: 'from@example.com',
+			TO_EMAIL: ''
+		};
+
+		expect(isEmailConfigured(mockEnv)).toBe(false);
 	});
 });

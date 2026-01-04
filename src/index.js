@@ -106,6 +106,23 @@ export function detectThresholdCrossing(previousAmount, currentAmount, threshold
  * @returns {string} HTML email body
  */
 export function buildNotificationEmail(lotteryName, previousAmount, currentAmount, threshold, nextDrawing) {
+	// Validate inputs
+	if (!lotteryName || typeof lotteryName !== 'string') {
+		throw new Error('lotteryName must be a non-empty string');
+	}
+	if (typeof previousAmount !== 'number' || isNaN(previousAmount)) {
+		throw new Error('previousAmount must be a valid number');
+	}
+	if (typeof currentAmount !== 'number' || isNaN(currentAmount)) {
+		throw new Error('currentAmount must be a valid number');
+	}
+	if (typeof threshold !== 'number' || isNaN(threshold)) {
+		throw new Error('threshold must be a valid number');
+	}
+	if (!nextDrawing || typeof nextDrawing !== 'string') {
+		throw new Error('nextDrawing must be a non-empty string');
+	}
+
 	const previousDisplay = formatJackpotDisplay(previousAmount);
 	const currentDisplay = formatJackpotDisplay(currentAmount);
 	const thresholdDisplay = formatJackpotDisplay(threshold);
@@ -142,6 +159,15 @@ export function buildNotificationEmail(lotteryName, previousAmount, currentAmoun
 }
 
 /**
+ * Check if email configuration is valid
+ * @param {Object} env - Environment object
+ * @returns {boolean} True if both FROM_EMAIL and TO_EMAIL are configured
+ */
+export function isEmailConfigured(env) {
+	return !!(env?.FROM_EMAIL && env?.TO_EMAIL);
+}
+
+/**
  * Send email notification via MailChannels
  * @param {string} fromEmail - Sender email (env.FROM_EMAIL)
  * @param {string} toEmail - Recipient email (env.TO_EMAIL)
@@ -172,7 +198,12 @@ export async function sendEmail(fromEmail, toEmail, subject, htmlBody) {
 		if (response.ok) {
 			return { success: true };
 		} else {
-			const errorText = await response.text();
+			let errorText = '';
+			try {
+				errorText = await response.text();
+			} catch (textError) {
+				errorText = '(unable to read error response)';
+			}
 			return {
 				success: false,
 				error: `MailChannels API error: ${response.status} ${response.statusText} - ${errorText}`
@@ -299,7 +330,7 @@ export default {
 			// 5. Send email notifications if crossed (parallel)
 			const notifications = [];
 
-			if (megaCrossing.crossed && !megaMillions.error && env.FROM_EMAIL && env.TO_EMAIL) {
+			if (megaCrossing.crossed && !megaMillions.error && isEmailConfigured(env)) {
 				const html = buildNotificationEmail(
 					'Mega Millions',
 					prevMega,
@@ -317,7 +348,7 @@ export default {
 				);
 			}
 
-			if (powerballCrossing.crossed && !powerball.error && env.FROM_EMAIL && env.TO_EMAIL) {
+			if (powerballCrossing.crossed && !powerball.error && isEmailConfigured(env)) {
 				const html = buildNotificationEmail(
 					'Powerball',
 					prevPowerball,
