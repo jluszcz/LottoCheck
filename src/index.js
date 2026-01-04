@@ -547,9 +547,14 @@ async function checkPowerball() {
 		}
 
 		// Extract next drawing date
+		// Handles both formats:
+		// - Abbreviated: "Mon, Jan 5, 2026"
+		// - Full: "Monday, January 5, 2026"
 		const drawingPatterns = [
-			/Next Drawing[^:]*:\s*([A-Za-z]+,\s*[A-Za-z]+\s*\d+,\s*\d{4})/i,
-			/([A-Za-z]+,\s*[A-Za-z]+\s*\d+,\s*\d{4})/i
+			/Next Drawing[^>]*>\s*([A-Za-z]{3},\s*[A-Za-z]{3}\s*\d{1,2},\s*\d{4})/i, // Abbreviated
+			/Next Drawing[^:]*:\s*([A-Za-z]+,\s*[A-Za-z]+\s*\d+,\s*\d{4})/i,          // Full format
+			/([A-Za-z]{3},\s*[A-Za-z]{3}\s*\d{1,2},\s*\d{4})/i,                       // Abbreviated (fallback)
+			/([A-Za-z]+,\s*[A-Za-z]+\s*\d+,\s*\d{4})/i                                 // Full (fallback)
 		];
 
 		let nextDrawing = null;

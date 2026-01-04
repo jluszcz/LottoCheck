@@ -849,6 +849,99 @@ describe('Powerball scraping', () => {
 		expect(data.powerball.exceedsThreshold).toBe(false);
 	});
 
+	it('correctly parses abbreviated date format (Mon, Jan 5, 2026)', async () => {
+		const mockFetch = vi.fn();
+		mockFetch.mockImplementationOnce(() =>
+			Promise.resolve({
+				json: () => Promise.resolve({
+					d: JSON.stringify({
+						Jackpot: { NextPrizePool: 500000000 },
+						NextDrawingDate: '2025-12-26T00:00:00'
+					})
+				})
+			})
+		);
+		mockFetch.mockImplementationOnce(() =>
+			Promise.resolve({
+				text: () => Promise.resolve(
+					'<html><h5>Mon, Jan 5, 2026</h5>Estimated Jackpot $86 Million</html>'
+				)
+			})
+		);
+		global.fetch = mockFetch;
+
+		const request = new Request('http://localhost');
+		const ctx = createExecutionContext();
+		const response = await worker.fetch(request, env, ctx);
+		const data = await response.json();
+
+		expect(data.powerball.lottery).toBe('Powerball');
+		expect(data.powerball.jackpot).toContain('Million');
+		expect(data.powerball.jackpotAmount).toBe(86);
+		expect(data.powerball.nextDrawing).toBe('Mon, Jan 5, 2026');
+	});
+
+	it('correctly parses abbreviated date with Next Drawing header', async () => {
+		const mockFetch = vi.fn();
+		mockFetch.mockImplementationOnce(() =>
+			Promise.resolve({
+				json: () => Promise.resolve({
+					d: JSON.stringify({
+						Jackpot: { NextPrizePool: 500000000 },
+						NextDrawingDate: '2025-12-26T00:00:00'
+					})
+				})
+			})
+		);
+		mockFetch.mockImplementationOnce(() =>
+			Promise.resolve({
+				text: () => Promise.resolve(
+					'<html>Next Drawing<h5>Wed, Dec 11, 2024</h5>Estimated Jackpot: $150 Million</html>'
+				)
+			})
+		);
+		global.fetch = mockFetch;
+
+		const request = new Request('http://localhost');
+		const ctx = createExecutionContext();
+		const response = await worker.fetch(request, env, ctx);
+		const data = await response.json();
+
+		expect(data.powerball.nextDrawing).toBe('Wed, Dec 11, 2024');
+		expect(data.powerball.jackpotAmount).toBe(150);
+	});
+
+	it('handles both abbreviated and full date formats', async () => {
+		const mockFetch = vi.fn();
+		mockFetch.mockImplementationOnce(() =>
+			Promise.resolve({
+				json: () => Promise.resolve({
+					d: JSON.stringify({
+						Jackpot: { NextPrizePool: 500000000 },
+						NextDrawingDate: '2025-12-26T00:00:00'
+					})
+				})
+			})
+		);
+		// Test with full format still works
+		mockFetch.mockImplementationOnce(() =>
+			Promise.resolve({
+				text: () => Promise.resolve(
+					'<html>Estimated Jackpot: $200 Million Next Drawing: Saturday, March 15, 2025</html>'
+				)
+			})
+		);
+		global.fetch = mockFetch;
+
+		const request = new Request('http://localhost');
+		const ctx = createExecutionContext();
+		const response = await worker.fetch(request, env, ctx);
+		const data = await response.json();
+
+		expect(data.powerball.nextDrawing).toBe('Saturday, March 15, 2025');
+		expect(data.powerball.jackpotAmount).toBe(200);
+	});
+
 	describe('KV Storage', () => {
 		/**
 		 * Create a mock KV namespace for testing
