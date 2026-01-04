@@ -372,22 +372,21 @@ export default {
 				);
 			}
 
-			// Send email notifications in background (fire-and-forget)
-			// Use ctx.waitUntil() to ensure emails send even after handler returns
-			ctx.waitUntil(
-				Promise.all(notifications).then((emailResults) => {
-					emailResults.forEach((result) => {
-						if (result.success) {
-							console.log(`Email sent successfully for ${result.lottery}`);
-						} else {
-							console.error(`Email failed for ${result.lottery}:`, result.error);
-						}
-					});
-				})
-			);
+			// Send email notifications and wait for completion
+			// CRITICAL: Must await emails before storing in KV to prevent race condition
+			// If we store before emails send, failed emails won't retry on next run
+			const emailResults = await Promise.all(notifications);
+			emailResults.forEach((result) => {
+				if (result.success) {
+					console.log(`Email sent successfully for ${result.lottery}`);
+				} else {
+					console.error(`Email failed for ${result.lottery}:`, result.error);
+				}
+			});
 
 			// 6. Store current amounts in KV for next run (always, even if errors)
 			// Use ctx.waitUntil() to ensure KV operations complete even after handler returns
+			// Safe to use ctx.waitUntil here because emails have already completed
 			ctx.waitUntil(Promise.all([
 				storePreviousJackpot(env.LOTTERY_STATE, 'Mega Millions', megaMillions.jackpotAmount),
 				storePreviousJackpot(env.LOTTERY_STATE, 'Powerball', powerball.jackpotAmount)
