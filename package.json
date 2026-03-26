@@ -9,6 +9,10 @@
     "test": "vitest run",
     "test:watch": "vitest"
   },
+  "overrides": {
+    "undici": "^7.24.6",
+    "picomatch": "^4.0.4"
+  },
   "devDependencies": {
     "@cloudflare/vitest-pool-workers": "^0.12.14",
     "@cloudflare/workers-types": "^4.20260317.1",
