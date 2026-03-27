@@ -8,6 +8,3 @@ updates:
       default-days: 7
     assignees:
       - "jluszcz"
-    ignore:
-      - dependency-name: "vitest"
-      - dependency-name: "@vitest/coverage-*"
