@@ -33,8 +33,8 @@ The worker exports an object with two handlers:
    - Triggered daily at 8pm UTC (3pm EST / 4pm EDT)
    - Retrieves previous jackpot amounts from KV storage
    - Detects threshold crossings (below→above transitions)
-   - Sends email notifications via MailChannels when threshold is crossed
-   - Stores current jackpot amounts in KV for next run
+   - Sends email notifications via the Cloudflare Email Service binding when threshold is crossed
+   - Stores current jackpot amounts in KV for next run (skipped on fetch or email failure)
    - Logs jackpot data to CloudFlare dashboard
 
 ### Data Flow
@@ -44,12 +44,12 @@ The worker exports an object with two handlers:
 - Applies threshold checking via `checkThresholds()`
 - Returns JSON response
 
-**scheduled() handler** - Full notification workflow:
+**scheduled() handler** - Full notification workflow, per lottery via `processLottery()`:
 1. Fetches current jackpots: `checkMegaMillions()` and `checkPowerball()`
 2. Retrieves previous amounts: `getPreviousJackpot()` from KV
 3. Detects crossings: `detectThresholdCrossing()` for each lottery
-4. Sends notifications: `sendEmail()` via MailChannels if threshold crossed
-5. Stores current state: `storePreviousJackpot()` to KV
+4. Sends notifications: `sendEmail()` via the `EMAIL` send_email binding if threshold crossed
+5. Stores current state: `storePreviousJackpot()` to KV — skipped when the fetch errored (a transient failure must not overwrite good state with 0 and cause a duplicate alert later) or when the notification email failed (so the crossing retries on the next run)
 
 Data fetching functions return a standardized object:
 ```javascript
@@ -72,7 +72,7 @@ Data fetching functions return a standardized object:
 
 **Powerball**: HTML scraping with regex patterns
 - URL: `https://www.powerball.com/`
-- Uses multiple regex patterns to handle different HTML layouts
+- Uses multiple regex patterns to handle different HTML layouts; all patterns are anchored to a jackpot label or the `game-jackpot-number` markup — there is deliberately no bare "$X Million" fallback because the page also shows cash values and prize tiers
 - Extracts numeric amount and unit (Million/Billion)
 - Less reliable but no API currently available
 
@@ -94,9 +94,10 @@ crons = ["0 20 * * *"]  # 8pm UTC = 3pm EST / 4pm EDT
 
 ## Implemented Features
 
-**Email Notifications via MailChannels**:
-- Configured via `FROM_EMAIL` and `TO_EMAIL` environment variables in `wrangler.toml`
-- Sends HTML-formatted emails when threshold is crossed
+**Email Notifications via Cloudflare Email Service**:
+- Sent through the `EMAIL` send_email binding declared in `wrangler.toml` (no API keys)
+- `FROM_EMAIL` (must be on a domain onboarded to Email Sending) and `TO_EMAIL` are set as secrets or in `.dev.vars`
+- Sends HTML emails with a plain-text alternative when threshold is crossed
 - Gracefully handles missing configuration (skips email sending)
 
 **KV Storage**:
