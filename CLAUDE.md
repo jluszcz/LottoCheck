@@ -46,7 +46,7 @@ The worker exports an object with two handlers:
 
 **scheduled() handler** - Full notification workflow, per lottery via `processLottery()`:
 1. Fetches current jackpots: `checkMegaMillions()` and `checkPowerball()`
-2. Retrieves previous amounts: `getPreviousJackpot()` from KV — returns `null` when the read fails (distinct from `0` = no state yet), in which case the lottery is skipped for the run so an unknown previous amount isn't treated as a fresh crossing
+2. Retrieves previous amounts: `getPreviousJackpot()` from KV — returns `null` when the read fails (distinct from `0` = no state yet), in which case the lottery is skipped for the run so an unknown previous amount isn't treated as a fresh crossing. A corrupt stored value (unparseable JSON or non-numeric amount) is instead treated as `0`: unlike a transient read failure it would never self-heal if skipped, so the next successful run overwrites it at the cost of at most one duplicate alert
 3. Detects crossings: `detectThresholdCrossing()` for each lottery
 4. Sends notifications: `sendEmail()` via the `EMAIL` send_email binding if threshold crossed
 5. Stores current state: `storePreviousJackpot()` to KV — skipped when the fetch errored (a transient failure must not overwrite good state with 0 and cause a duplicate alert later), when the KV read failed, or when the notification email failed (so the crossing retries on the next run)

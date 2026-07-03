@@ -163,6 +163,14 @@ function createMockEnv(overrides = {}) {
 	};
 }
 
+/**
+ * Create a ScheduledController-shaped object for scheduled-handler tests
+ * @returns {Object} Controller with scheduledTime and cron
+ */
+function createScheduledController() {
+	return { scheduledTime: Date.now(), cron: '0 20 * * *' };
+}
+
 describe('LottoCheck Worker', () => {
 	describe('fetch handler', () => {
 		it('returns jackpot data for both lotteries', async () => {
@@ -234,7 +242,7 @@ describe('LottoCheck Worker', () => {
 
 			mockLotteries();
 
-			const controller = { scheduledTime: Date.now(), cron: '0 20 * * *' };
+			const controller = createScheduledController();
 			const ctx = createExecutionContext();
 
 			await worker.scheduled(controller, createMockEnv(), ctx);
@@ -256,7 +264,7 @@ describe('LottoCheck Worker', () => {
 				powerballJackpot: fixtures.powerball.twoBillion
 			});
 
-			const controller = { scheduledTime: Date.now(), cron: '0 20 * * *' };
+			const controller = createScheduledController();
 			const ctx = createExecutionContext();
 
 			await worker.scheduled(controller, createMockEnv(), ctx);
@@ -281,7 +289,7 @@ describe('LottoCheck Worker', () => {
 				})
 			});
 
-			const controller = {};
+			const controller = createScheduledController();
 			const ctx = createExecutionContext();
 
 			await worker.scheduled(controller, mockEnv, ctx);
@@ -296,7 +304,7 @@ describe('LottoCheck Worker', () => {
 			mockLotteries();
 			const mockEnv = createMockEnv();
 
-			const controller = {};
+			const controller = createScheduledController();
 			const ctx = createExecutionContext();
 
 			await worker.scheduled(controller, mockEnv, ctx);
@@ -321,7 +329,7 @@ describe('LottoCheck Worker', () => {
 				TO_EMAIL: 'to@test.com'
 			});
 
-			const controller = {};
+			const controller = createScheduledController();
 			const ctx = createExecutionContext();
 
 			await worker.scheduled(controller, mockEnv, ctx);
@@ -357,7 +365,7 @@ describe('LottoCheck Worker', () => {
 				TO_EMAIL: 'to@test.com'
 			});
 
-			const controller = {};
+			const controller = createScheduledController();
 			const ctx = createExecutionContext();
 
 			await worker.scheduled(controller, mockEnv, ctx);
@@ -370,7 +378,7 @@ describe('LottoCheck Worker', () => {
 			mockLotteries();
 			const mockEnv = createMockEnv({ LOTTERY_STATE: undefined });
 
-			const controller = {};
+			const controller = createScheduledController();
 			const ctx = createExecutionContext();
 
 			await expect(
@@ -394,7 +402,7 @@ describe('LottoCheck Worker', () => {
 				TO_EMAIL: 'to@test.com'
 			});
 
-			const controller = {};
+			const controller = createScheduledController();
 			const ctx = createExecutionContext();
 
 			await worker.scheduled(controller, mockEnv, ctx);
@@ -429,7 +437,7 @@ describe('LottoCheck Worker', () => {
 				TO_EMAIL: 'to@test.com'
 			});
 
-			const controller = {};
+			const controller = createScheduledController();
 			const ctx = createExecutionContext();
 
 			await worker.scheduled(controller, mockEnv, ctx);
@@ -443,6 +451,28 @@ describe('LottoCheck Worker', () => {
 			expect(kv.put).toHaveBeenCalledWith('Powerball', expect.any(String));
 		});
 
+		it('repairs a corrupt KV value on the next successful run', async () => {
+			mockLotteries();
+
+			const kv = createMockKV();
+			kv._storage.set('Mega Millions', 'not valid json {');
+			const mockEnv = createMockEnv({ LOTTERY_STATE: kv });
+
+			const consoleErrorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+
+			const controller = createScheduledController();
+			const ctx = createExecutionContext();
+
+			await worker.scheduled(controller, mockEnv, ctx);
+			await waitOnExecutionContext(ctx);
+
+			// The corrupt value must be overwritten, not skipped forever
+			expect(kv.put).toHaveBeenCalledWith('Mega Millions', expect.any(String));
+			expect(JSON.parse(kv._storage.get('Mega Millions')).jackpotAmount).toBe(1700);
+
+			consoleErrorSpy.mockRestore();
+		});
+
 		it('keeps previous state when a lottery fetch fails', async () => {
 			mockMegaMillions('Server error', 500);
 			mockPowerball(powerballHtml(fixtures.powerball.halfBillion));
@@ -453,7 +483,7 @@ describe('LottoCheck Worker', () => {
 				})
 			});
 
-			const controller = {};
+			const controller = createScheduledController();
 			const ctx = createExecutionContext();
 
 			await worker.scheduled(controller, mockEnv, ctx);
@@ -476,7 +506,7 @@ describe('LottoCheck Worker', () => {
 				})
 			});
 
-			const controller = {};
+			const controller = createScheduledController();
 			const ctx = createExecutionContext();
 
 			await worker.scheduled(controller, mockEnv, ctx);
@@ -854,13 +884,30 @@ describe('KV Storage', () => {
 			expect(result).toBe(1500);
 		});
 
-		it('returns null when stored JSON is malformed', async () => {
+		it('returns 0 when stored JSON is malformed so the next run repairs it', async () => {
+			// A corrupt value is permanent — unlike a transient read failure,
+			// returning null would skip the store forever and disable the lottery
 			const mockKV = createMockKV();
 			mockKV._storage.set('Powerball', 'not valid json {');
 
+			const consoleErrorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+
 			const result = await getPreviousJackpot(mockKV, 'Powerball');
 
-			expect(result).toBeNull();
+			expect(result).toBe(0);
+			expect(consoleErrorSpy).toHaveBeenCalled();
+
+			consoleErrorSpy.mockRestore();
+		});
+
+		it('returns 0 when stored jackpotAmount is not a number', async () => {
+			const mockKV = createMockKV({
+				'Powerball': { jackpotAmount: '1500', lastChecked: '2025-12-25T20:00:00.000Z' }
+			});
+
+			const result = await getPreviousJackpot(mockKV, 'Powerball');
+
+			expect(result).toBe(0);
 		});
 
 		it('returns null when the KV read fails', async () => {
@@ -872,10 +919,15 @@ describe('KV Storage', () => {
 			expect(result).toBeNull();
 		});
 
-		it('handles undefined KV namespace gracefully', async () => {
+		it('handles undefined KV namespace gracefully and warns about it', async () => {
+			const consoleWarnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+
 			const result = await getPreviousJackpot(undefined, 'Mega Millions');
 
 			expect(result).toBe(0);
+			expect(consoleWarnSpy).toHaveBeenCalledWith(expect.stringContaining('No KV binding'));
+
+			consoleWarnSpy.mockRestore();
 		});
 
 		it('handles missing jackpotAmount field', async () => {
@@ -1112,6 +1164,7 @@ describe('sendEmail', () => {
 		);
 
 		expect(result.success).toBe(true);
+		expect(result.messageId).toBe('test-message-id');
 		expect(result.error).toBeUndefined();
 		expect(email.send).toHaveBeenCalledTimes(1);
 	});

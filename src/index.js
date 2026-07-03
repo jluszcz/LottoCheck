@@ -27,29 +27,40 @@ export function getThreshold(env) {
  *   state exists yet, or null when the read failed (caller should skip the run)
  */
 export async function getPreviousJackpot(kv, lotteryName) {
-	// Handle undefined KV (local dev, tests without KV binding)
+	// Handle undefined KV (local dev, tests without KV binding). In production
+	// a missing binding makes every above-threshold run look like a fresh
+	// crossing, so warn loudly rather than fail silently.
 	if (!kv) {
+		console.warn(`No KV binding for ${lotteryName}; treating previous jackpot as 0 (duplicate alerts possible)`);
 		return 0;
 	}
 
+	let stored;
 	try {
-		const stored = await kv.get(lotteryName);
-
-		// Return 0 if no previous state exists
-		if (!stored) {
-			return 0;
-		}
-
-		// Parse stored JSON
-		const data = JSON.parse(stored);
-		return data.jackpotAmount || 0;
-
+		stored = await kv.get(lotteryName);
 	} catch (error) {
 		// A failed read must not be treated as "no previous state" (0) — that
 		// would make an above-threshold jackpot look like a fresh crossing and
 		// re-send the alert; null tells the caller to skip this run instead
 		console.error(`Error reading previous jackpot for ${lotteryName}:`, error.message);
 		return null;
+	}
+
+	// Return 0 if no previous state exists
+	if (!stored) {
+		return 0;
+	}
+
+	try {
+		const data = JSON.parse(stored);
+		return Number.isFinite(data.jackpotAmount) ? data.jackpotAmount : 0;
+	} catch (error) {
+		// Unlike a transient read failure, a corrupt stored value is permanent:
+		// returning null here would skip the store forever and silently disable
+		// this lottery. Treat it as 0 so the next successful run overwrites the
+		// bad value — worst case is one duplicate alert.
+		console.error(`Corrupt stored state for ${lotteryName}, treating as 0 so the next run repairs it:`, error.message);
+		return 0;
 	}
 }
 
@@ -193,11 +204,11 @@ export function isEmailConfigured(env) {
  * @param {string} subject - Email subject
  * @param {string} htmlBody - HTML email body
  * @param {string} textBody - Plain-text email body
- * @returns {Promise<{success: boolean, error?: string}>} Send result
+ * @returns {Promise<{success: boolean, messageId?: string, error?: string}>} Send result
  */
 export async function sendEmail(emailBinding, fromEmail, toEmail, subject, htmlBody, textBody) {
 	try {
-		await emailBinding.send({
+		const result = await emailBinding.send({
 			to: toEmail,
 			from: { email: fromEmail, name: 'LottoCheck' },
 			subject,
@@ -205,7 +216,7 @@ export async function sendEmail(emailBinding, fromEmail, toEmail, subject, htmlB
 			text: textBody
 		});
 
-		return { success: true };
+		return { success: true, messageId: result?.messageId };
 
 	} catch (error) {
 		const code = error.code ? `${error.code}: ` : '';
@@ -287,7 +298,7 @@ async function processLottery(env, current, thresholdMillions) {
 				console.error(`Email failed for ${current.lottery}, keeping previous state to retry next run:`, result.error);
 				return;
 			}
-			console.log(`Email sent successfully for ${current.lottery}`);
+			console.log(`Email sent successfully for ${current.lottery} (messageId: ${result.messageId})`);
 		}
 	}
 
