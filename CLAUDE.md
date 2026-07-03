@@ -34,7 +34,7 @@ The worker exports an object with two handlers:
    - Retrieves previous jackpot amounts from KV storage
    - Detects threshold crossings (below→above transitions)
    - Sends email notifications via the Cloudflare Email Service binding when threshold is crossed
-   - Stores current jackpot amounts in KV for next run (skipped on fetch or email failure)
+   - Stores current jackpot amounts in KV for next run (skipped on fetch, KV read, or email failure)
    - Logs jackpot data to CloudFlare dashboard
 
 ### Data Flow
@@ -46,10 +46,10 @@ The worker exports an object with two handlers:
 
 **scheduled() handler** - Full notification workflow, per lottery via `processLottery()`:
 1. Fetches current jackpots: `checkMegaMillions()` and `checkPowerball()`
-2. Retrieves previous amounts: `getPreviousJackpot()` from KV
+2. Retrieves previous amounts: `getPreviousJackpot()` from KV — returns `null` when the read fails (distinct from `0` = no state yet), in which case the lottery is skipped for the run so an unknown previous amount isn't treated as a fresh crossing
 3. Detects crossings: `detectThresholdCrossing()` for each lottery
 4. Sends notifications: `sendEmail()` via the `EMAIL` send_email binding if threshold crossed
-5. Stores current state: `storePreviousJackpot()` to KV — skipped when the fetch errored (a transient failure must not overwrite good state with 0 and cause a duplicate alert later) or when the notification email failed (so the crossing retries on the next run)
+5. Stores current state: `storePreviousJackpot()` to KV — skipped when the fetch errored (a transient failure must not overwrite good state with 0 and cause a duplicate alert later), when the KV read failed, or when the notification email failed (so the crossing retries on the next run)
 
 Data fetching functions return a standardized object:
 ```javascript

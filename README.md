@@ -35,7 +35,7 @@ The worker runs daily and:
    - Your threshold
    - Next drawing date
 
-5. **Stores Current Jackpots** in KV for the next run. Storage is skipped for a lottery when its data fetch failed (so a transient error can't trigger a duplicate alert later) or when its notification email failed to send (so the crossing is retried on the next run)
+5. **Stores Current Jackpots** in KV for the next run. Storage is skipped for a lottery when its data fetch failed (so a transient error can't trigger a duplicate alert later), when reading its previous state from KV failed (an unknown previous amount must not be treated as a fresh crossing), or when its notification email failed to send (so the crossing is retried on the next run)
 
 6. **Logs Results** to CloudFlare's dashboard for monitoring
 
@@ -299,7 +299,7 @@ The **scheduled handler** integrates all components, processing each lottery thr
 2. Retrieves previous jackpots from KV using `getPreviousJackpot()`
 3. Detects threshold crossings using `detectThresholdCrossing()`
 4. Sends email notifications via `sendEmail()` (Cloudflare Email Service binding)
-5. Stores current jackpots using `storePreviousJackpot()` — skipped when the fetch or the notification email failed, so errors never overwrite good state and missed notifications retry on the next run
+5. Stores current jackpots using `storePreviousJackpot()` — skipped when the fetch, the KV read, or the notification email failed, so errors never overwrite good state and missed notifications retry on the next run
 
 Data fetching functions:
 - **Mega Millions**: Calls official API endpoint for structured JSON data

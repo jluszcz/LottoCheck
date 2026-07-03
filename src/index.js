@@ -23,7 +23,8 @@ export function getThreshold(env) {
  * Get previous jackpot amount from KV storage
  * @param {KVNamespace} kv - CloudFlare KV namespace
  * @param {string} lotteryName - "Mega Millions" or "Powerball"
- * @returns {Promise<number>} Previous jackpot amount in millions (0 if not found)
+ * @returns {Promise<number|null>} Previous jackpot amount in millions, 0 if no
+ *   state exists yet, or null when the read failed (caller should skip the run)
  */
 export async function getPreviousJackpot(kv, lotteryName) {
 	// Handle undefined KV (local dev, tests without KV binding)
@@ -44,9 +45,11 @@ export async function getPreviousJackpot(kv, lotteryName) {
 		return data.jackpotAmount || 0;
 
 	} catch (error) {
-		// Log error but return 0 to allow processing to continue
+		// A failed read must not be treated as "no previous state" (0) — that
+		// would make an above-threshold jackpot look like a fresh crossing and
+		// re-send the alert; null tells the caller to skip this run instead
 		console.error(`Error reading previous jackpot for ${lotteryName}:`, error.message);
-		return 0;
+		return null;
 	}
 }
 
@@ -250,7 +253,8 @@ export async function sendEmail(emailBinding, fromEmail, toEmail, subject, htmlB
 /**
  * Process one lottery: detect a threshold crossing, notify, and update stored state.
  * The KV update is skipped when the fetch failed (keeps the last good amount so a
- * transient error can't trigger a duplicate alert later) and when a notification
+ * transient error can't trigger a duplicate alert later), when the KV read failed
+ * (an unknown previous amount must not be treated as 0), and when a notification
  * email failed to send (so the crossing is retried on the next run).
  * @param {object} env - Environment variables
  * @param {LotteryResult} current - Current lottery result
@@ -264,6 +268,11 @@ async function processLottery(env, current, thresholdMillions) {
 	}
 
 	const previousAmount = await getPreviousJackpot(env.LOTTERY_STATE, current.lottery);
+	if (previousAmount === null) {
+		console.error(`${current.lottery}: KV read failed, skipping this run to avoid a duplicate alert`);
+		return;
+	}
+
 	const crossing = detectThresholdCrossing(previousAmount, current.jackpotAmount, thresholdMillions);
 
 	if (crossing.crossed) {

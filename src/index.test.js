@@ -334,6 +334,10 @@ describe('LottoCheck Worker', () => {
 			expect(message.subject).toContain('Mega Millions');
 			expect(message.html).toContain('$2.00 Billion');
 			expect(message.text).toContain('$2.00 Billion');
+
+			// State is stored after a successful notification
+			expect(mockEnv.LOTTERY_STATE.put).toHaveBeenCalledWith('Mega Millions', expect.any(String));
+			expect(JSON.parse(mockEnv.LOTTERY_STATE._storage.get('Mega Millions')).jackpotAmount).toBe(2000);
 		});
 
 		it('does not send email when staying above threshold', async () => {
@@ -401,6 +405,42 @@ describe('LottoCheck Worker', () => {
 			expect(mockEnv.LOTTERY_STATE.put).not.toHaveBeenCalledWith('Mega Millions', expect.any(String));
 			// Powerball did not cross, so its state updates normally
 			expect(mockEnv.LOTTERY_STATE.put).toHaveBeenCalledWith('Powerball', expect.any(String));
+		});
+
+		it('skips a lottery when its KV read fails so an unknown previous amount is not treated as 0', async () => {
+			mockMegaMillions(megaMillionsBody(fixtures.megaMillions.twoBillion.amount));
+			mockPowerball(powerballHtml(fixtures.powerball.halfBillion));
+
+			const email = createMockEmail();
+			const kv = createMockKV({
+				'Powerball': { jackpotAmount: 400, lastChecked: '2025-01-01' }
+			});
+			const workingGet = kv.get.getMockImplementation();
+			kv.get = vi.fn(async (key) => {
+				if (key === 'Mega Millions') {
+					throw new Error('KV timeout');
+				}
+				return workingGet(key);
+			});
+			const mockEnv = createMockEnv({
+				LOTTERY_STATE: kv,
+				EMAIL: email,
+				FROM_EMAIL: 'from@test.com',
+				TO_EMAIL: 'to@test.com'
+			});
+
+			const controller = {};
+			const ctx = createExecutionContext();
+
+			await worker.scheduled(controller, mockEnv, ctx);
+			await waitOnExecutionContext(ctx);
+
+			// Mega Millions is above threshold but its previous amount is unknown:
+			// no alert (it may not be a fresh crossing) and no state overwrite
+			expect(email.send).not.toHaveBeenCalled();
+			expect(kv.put).not.toHaveBeenCalledWith('Mega Millions', expect.any(String));
+			// Powerball is unaffected and updates normally
+			expect(kv.put).toHaveBeenCalledWith('Powerball', expect.any(String));
 		});
 
 		it('keeps previous state when a lottery fetch fails', async () => {
@@ -814,13 +854,22 @@ describe('KV Storage', () => {
 			expect(result).toBe(1500);
 		});
 
-		it('handles malformed JSON gracefully', async () => {
+		it('returns null when stored JSON is malformed', async () => {
 			const mockKV = createMockKV();
 			mockKV._storage.set('Powerball', 'not valid json {');
 
 			const result = await getPreviousJackpot(mockKV, 'Powerball');
 
-			expect(result).toBe(0);
+			expect(result).toBeNull();
+		});
+
+		it('returns null when the KV read fails', async () => {
+			const mockKV = createMockKV();
+			mockKV.get = vi.fn().mockRejectedValue(new Error('KV timeout'));
+
+			const result = await getPreviousJackpot(mockKV, 'Mega Millions');
+
+			expect(result).toBeNull();
 		});
 
 		it('handles undefined KV namespace gracefully', async () => {
