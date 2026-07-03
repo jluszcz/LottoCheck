@@ -4,19 +4,19 @@ A CloudFlare Worker that monitors Mega Millions and Powerball jackpots daily and
 
 ## Features
 
-- **Automated Daily Checks**: Runs automatically at 3pm ET every day
+- **Automated Daily Checks**: Runs automatically every day at 8pm UTC (3pm EST / 4pm EDT — a fixed UTC cron doesn't follow daylight saving)
 - **Dual Lottery Support**: Monitors both Mega Millions and Powerball
 - **Configurable Threshold**: Set your own jackpot threshold (defaults to $1.5 billion)
-- **Email Notifications**: Get notified via MailChannels when jackpots cross your threshold
+- **Email Notifications**: Get notified via Cloudflare Email Service when jackpots cross your threshold
 - **Smart Threshold Crossing Detection**: Only notifies when jackpot moves from below to above threshold
 - **Persistent State**: Uses CloudFlare KV to remember previous jackpot amounts
 - **Real-time Data**: Fetches from official lottery sources
 - **HTTP API**: Test endpoint for manual checks during development
-- **Zero Cost**: Runs on CloudFlare's free tier (including email via MailChannels)
+- **Zero Cost**: Runs on CloudFlare's free tier (including email via Cloudflare Email Service)
 
 ## How It Works
 
-The worker runs daily at 3pm ET and:
+The worker runs daily and:
 
 1. **Fetches Current Jackpots** from official sources:
    - **Mega Millions**: Uses official API endpoint for reliable, structured data
@@ -29,13 +29,13 @@ The worker runs daily at 3pm ET and:
    - Only triggers notifications when a jackpot crosses from below to above your threshold
    - Prevents duplicate notifications when jackpots stay above threshold
 
-4. **Sends Email Notifications** (via MailChannels) when a threshold crossing is detected, including:
+4. **Sends Email Notifications** (via the Cloudflare Email Service binding) when a threshold crossing is detected, including:
    - Lottery name
    - Previous and current jackpot amounts
    - Your threshold
    - Next drawing date
 
-5. **Stores Current Jackpots** in KV for the next run
+5. **Stores Current Jackpots** in KV for the next run. Storage is skipped for a lottery when its data fetch failed (so a transient error can't trigger a duplicate alert later), when reading its previous state from KV failed (an unknown previous amount must not be treated as a fresh crossing), or when its notification email failed to send (so the crossing is retried on the next run)
 
 6. **Logs Results** to CloudFlare's dashboard for monitoring
 
@@ -43,7 +43,7 @@ The worker runs daily at 3pm ET and:
 
 ### Prerequisites
 
-- Node.js 16+ and npm
+- Node.js 20+ and npm
 - CloudFlare account (free tier works)
 - Wrangler CLI (installed automatically with `npm install`)
 
@@ -119,7 +119,7 @@ Tests are organized by feature area:
 - **Scheduled handler**: Cron trigger and logging behavior
 - **KV Storage**: Previous jackpot retrieval and storage
 - **Threshold Crossing Detection**: Below→above crossing logic
-- **Email Notifications**: MailChannels integration and HTML formatting
+- **Email Notifications**: Email Service binding integration and HTML/text formatting
 - **Integration**: End-to-end scheduled handler with KV and email
 - **Threshold checking**: Jackpot comparison logic and edge cases
 - **Mega Millions API**: API response parsing and error handling
@@ -127,25 +127,35 @@ Tests are organized by feature area:
 
 ### Test Helpers and Fixtures
 
-The test suite uses helper functions and fixtures to reduce duplication:
+Outbound requests are mocked by stubbing the global `fetch` with a per-origin
+router (the Workers Vitest pool makes `globalThis.fetch` writable for this).
+Helper functions and fixtures reduce duplication:
 
 ```javascript
-// Use test fixtures for consistent data
-setupMockFetch({
+// Mock both lotteries with successful responses
+mockLotteries({
   megaMillionsJackpot: fixtures.megaMillions.twoBillion.amount,
   powerballJackpot: fixtures.powerball.twoBillion
 });
 
-// Or use individual mock helpers
-mockMegaMillionsResponse(1700000000);
-mockPowerballResponse('$1.50 Billion');
+// Or mock each origin individually (body, status)
+mockMegaMillions(megaMillionsBody(1700000000));
+mockPowerball(powerballHtml('$1.50 Billion'));
+mockMegaMillions('Server error', 500);
+
+// Mock bindings for scheduled-handler tests
+const mockEnv = createMockEnv({
+  LOTTERY_STATE: createMockKV({ 'Mega Millions': { jackpotAmount: 1000 } }),
+  EMAIL: createMockEmail(),
+  FROM_EMAIL: 'from@test.com',
+  TO_EMAIL: 'to@test.com'
+});
 ```
 
 Available fixtures:
 - `fixtures.megaMillions`: Common jackpot amounts (billion, halfBillion, twoBillion)
 - `fixtures.powerball`: Formatted jackpot strings
 - `fixtures.dates`: Test date values
-- `fixtures.thresholds`: Common threshold values
 
 ### Continuous Integration
 
@@ -175,7 +185,7 @@ npm run deploy
 ```
 
 After deployment:
-- The worker runs automatically at 3pm ET daily (8pm UTC)
+- The worker runs automatically at 8pm UTC daily (3pm EST / 4pm EDT)
 - View logs in CloudFlare Dashboard → Workers → lottocheck → Logs → Real-time Logs
 - Visit your worker URL to manually check current jackpots
 
@@ -210,13 +220,17 @@ The threshold is validated on startup and falls back to the default if invalid.
 
 ### Email Notifications
 
-Email notifications are sent via MailChannels when a jackpot crosses your threshold.
+Email notifications are sent via [Cloudflare Email Service](https://developers.cloudflare.com/email-service/) when a jackpot crosses your threshold. The worker uses a `send_email` binding (named `EMAIL` in `wrangler.toml`), so no API keys are required.
+
+**One-time account setup**:
+1. Onboard a domain you own to Email Sending (Cloudflare Dashboard → Email, or `npx wrangler email sending enable yourdomain.com` on recent wrangler versions)
+2. `FROM_EMAIL` must be an address on that domain; `TO_EMAIL` can be any address you control
 
 **Production Setup** (recommended - keeps emails private):
 ```bash
 # Set secrets that won't be committed to git
 wrangler secret put FROM_EMAIL
-# Enter: alerts@yourdomain.com
+# Enter: alerts@yourdomain.com (domain must be onboarded to Email Sending)
 
 wrangler secret put TO_EMAIL
 # Enter: your-email@example.com
@@ -237,7 +251,7 @@ cp .dev.vars.example .dev.vars
 npm run dev
 ```
 
-**Note**: If these variables are not set, the worker will skip email sending and only log results.
+**Note**: If the binding or these variables are not set, the worker will skip email sending and only log results.
 
 ### KV Storage
 
@@ -280,12 +294,12 @@ The worker exports two handlers:
 1. **`fetch()`** - HTTP handler for manual testing and on-demand checks
 2. **`scheduled()`** - Cron handler that runs on the configured schedule
 
-The **scheduled handler** integrates all components:
+The **scheduled handler** integrates all components, processing each lottery through `processLottery()`:
 1. Fetches current jackpots using `checkMegaMillions()` and `checkPowerball()`
 2. Retrieves previous jackpots from KV using `getPreviousJackpot()`
 3. Detects threshold crossings using `detectThresholdCrossing()`
-4. Sends email notifications via `sendEmail()` (MailChannels integration)
-5. Stores current jackpots using `storePreviousJackpot()`
+4. Sends email notifications via `sendEmail()` (Cloudflare Email Service binding)
+5. Stores current jackpots using `storePreviousJackpot()` — skipped when the fetch, the KV read, or the notification email failed, so errors never overwrite good state and missed notifications retry on the next run
 
 Data fetching functions:
 - **Mega Millions**: Calls official API endpoint for structured JSON data
