@@ -92,6 +92,15 @@ Scheduled trigger is defined in `wrangler.toml`:
 crons = ["0 20 * * *"]  # 8pm UTC = 3pm EST / 4pm EDT
 ```
 
+## Email Address Hygiene
+
+**Never check real email addresses into source control.** Real addresses live only in:
+
+- Cloudflare secrets (`wrangler secret put FROM_EMAIL` / `wrangler secret put TO_EMAIL`)
+- `.dev.vars` (gitignored) for local development
+
+Any tracked file — `wrangler.toml`, `.dev.vars.example`, tests, docs, comments — must use placeholders only (e.g., `alerts@yourdomain.com`, `to@example.com`). Before committing, verify the diff contains no real addresses.
+
 ## Implemented Features
 
 **Email Notifications via Cloudflare Email Service**:
