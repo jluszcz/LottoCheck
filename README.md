@@ -72,31 +72,48 @@ Visit `http://localhost:8787` to see current jackpot data in JSON format:
 
 ```json
 {
-  "timestamp": "2025-12-24T12:13:06.388Z",
-  "megaMillions": {
-    "lottery": "Mega Millions",
-    "jackpot": "$125 Million",
-    "jackpotAmount": 125,
-    "nextDrawing": "Fri, Dec 26, 2025",
-    "exceedsThreshold": false
-  },
-  "powerball": {
-    "lottery": "Powerball",
-    "jackpot": "$1.70 Billion",
-    "jackpotAmount": 1700,
-    "nextDrawing": "Mon, Dec 22, 2025",
-    "exceedsThreshold": true
-  },
-  "threshold": {
-    "amount": 1500,
-    "display": "$1.50 Billion",
-    "exceeded": true,
-    "exceedingLotteries": ["Powerball"]
-  }
+	"timestamp": "2025-12-24T12:13:06.388Z",
+	"megaMillions": {
+		"lottery": "Mega Millions",
+		"jackpot": "$125 Million",
+		"jackpotAmount": 125,
+		"nextDrawing": "Fri, Dec 26, 2025",
+		"exceedsThreshold": false
+	},
+	"powerball": {
+		"lottery": "Powerball",
+		"jackpot": "$1.70 Billion",
+		"jackpotAmount": 1700,
+		"nextDrawing": "Mon, Dec 22, 2025",
+		"exceedsThreshold": true
+	},
+	"threshold": {
+		"amount": 1500,
+		"display": "$1.50 Billion",
+		"exceeded": true,
+		"exceedingLotteries": ["Powerball"]
+	}
 }
 ```
 
 **Note**: Scheduled triggers don't run automatically in local development. Use the HTTP endpoint for testing.
+
+## Code Quality
+
+The project uses [Prettier](https://prettier.io/) for formatting and [ESLint](https://eslint.org/) for linting. Both run in CI and must pass before a PR can be merged.
+
+```bash
+# Auto-format all files
+npm run format
+
+# Verify formatting without writing changes (used in CI)
+npm run format:check
+
+# Run the linter
+npm run lint
+```
+
+Prettier is configured in `.prettierrc.json` (tabs, single quotes, 120-char width) and ESLint in `eslint.config.js` (flat config, `@eslint/js` recommended rules). These checks also run locally via the [pre-commit](https://pre-commit.com/) hooks in `.pre-commit-config.yaml`.
 
 ## Testing
 
@@ -115,6 +132,7 @@ npm run test:watch
 ### Test Structure
 
 Tests are organized by feature area:
+
 - **Fetch handler**: HTTP endpoint functionality
 - **Scheduled handler**: Cron trigger and logging behavior
 - **KV Storage**: Previous jackpot retrieval and storage
@@ -134,8 +152,8 @@ Helper functions and fixtures reduce duplication:
 ```javascript
 // Mock both lotteries with successful responses
 mockLotteries({
-  megaMillionsJackpot: fixtures.megaMillions.twoBillion.amount,
-  powerballJackpot: fixtures.powerball.twoBillion
+	megaMillionsJackpot: fixtures.megaMillions.twoBillion.amount,
+	powerballJackpot: fixtures.powerball.twoBillion,
 });
 
 // Or mock each origin individually (body, status)
@@ -145,29 +163,36 @@ mockMegaMillions('Server error', 500);
 
 // Mock bindings for scheduled-handler tests
 const mockEnv = createMockEnv({
-  LOTTERY_STATE: createMockKV({ 'Mega Millions': { jackpotAmount: 1000 } }),
-  EMAIL: createMockEmail(),
-  FROM_EMAIL: 'from@test.com',
-  TO_EMAIL: 'to@test.com'
+	LOTTERY_STATE: createMockKV({ 'Mega Millions': { jackpotAmount: 1000 } }),
+	EMAIL: createMockEmail(),
+	FROM_EMAIL: 'from@test.com',
+	TO_EMAIL: 'to@test.com',
 });
 ```
 
 Available fixtures:
+
 - `fixtures.megaMillions`: Common jackpot amounts (billion, halfBillion, twoBillion)
 - `fixtures.powerball`: Formatted jackpot strings
 - `fixtures.dates`: Test date values
 
 ### Continuous Integration
 
-Tests run automatically on:
+Checks run automatically on:
+
 - Every push to `main` branch
 - Every pull request to `main` branch
 
-GitHub Actions workflow runs tests and must pass before PRs can be merged.
+The GitHub Actions workflow runs three steps that must all pass before PRs can be merged:
+
+1. **Formatting** (`npm run format:check`) — Prettier verifies code style
+2. **Linting** (`npm run lint`) — ESLint checks for code-quality issues
+3. **Tests** (`npm test`) — Vitest runs the full test suite
 
 ### Test Coverage
 
 The test suite provides comprehensive coverage:
+
 - ✓ All public functions tested
 - ✓ Success and error paths covered
 - ✓ Edge cases validated (null/undefined handling, missing data)
@@ -185,6 +210,7 @@ npm run deploy
 ```
 
 After deployment:
+
 - The worker runs automatically at 8pm UTC daily (3pm EST / 4pm EDT)
 - View logs in CloudFlare Dashboard → Workers → lottocheck → Logs → Real-time Logs
 - Visit your worker URL to manually check current jackpots
@@ -212,6 +238,7 @@ JACKPOT_THRESHOLD = "1500"  # in millions ($1.5 billion)
 ```
 
 Adjust this value to set your preferred notification threshold:
+
 - `"1000"` = $1 billion
 - `"1500"` = $1.5 billion (default)
 - `"2000"` = $2 billion
@@ -223,10 +250,12 @@ The threshold is validated on startup and falls back to the default if invalid.
 Email notifications are sent via [Cloudflare Email Service](https://developers.cloudflare.com/email-service/) when a jackpot crosses your threshold. The worker uses a `send_email` binding (named `EMAIL` in `wrangler.toml`), so no API keys are required.
 
 **One-time account setup**:
+
 1. Onboard a domain you own to Email Sending (Cloudflare Dashboard → Email, or `npx wrangler email sending enable yourdomain.com` on recent wrangler versions)
 2. `FROM_EMAIL` must be an address on that domain; `TO_EMAIL` can be any address you control
 
 **Production Setup** (recommended - keeps emails private):
+
 ```bash
 # Set secrets that won't be committed to git
 wrangler secret put FROM_EMAIL
@@ -240,6 +269,7 @@ npm run deploy
 ```
 
 **Local Development Setup**:
+
 ```bash
 # Copy the example file
 cp .dev.vars.example .dev.vars
@@ -258,6 +288,7 @@ npm run dev
 The worker uses CloudFlare KV to store previous jackpot amounts for threshold crossing detection.
 
 **Setup Steps**:
+
 1. Create KV namespaces:
    ```bash
    wrangler kv:namespace create "LOTTERY_STATE"
@@ -278,11 +309,13 @@ The worker uses CloudFlare KV to store previous jackpot amounts for threshold cr
 The worker uses different methods to fetch data from each lottery:
 
 **Mega Millions** (API):
+
 - Endpoint: `https://www.megamillions.com/cmspages/utilservice.asmx/GetLatestDrawData`
 - Uses official API for reliable, structured data
 - If the endpoint changes, update the URL in `checkMegaMillions()` in `src/index.js`
 
 **Powerball** (Web Scraping):
+
 - URL: https://www.powerball.com/
 - Scrapes HTML with regex patterns
 - If the site's HTML structure changes, update the regex patterns in `checkPowerball()` in `src/index.js`
@@ -295,6 +328,7 @@ The worker exports two handlers:
 2. **`scheduled()`** - Cron handler that runs on the configured schedule
 
 The **scheduled handler** integrates all components, processing each lottery through `processLottery()`:
+
 1. Fetches current jackpots using `checkMegaMillions()` and `checkPowerball()`
 2. Retrieves previous jackpots from KV using `getPreviousJackpot()`
 3. Detects threshold crossings using `detectThresholdCrossing()`
@@ -302,6 +336,7 @@ The **scheduled handler** integrates all components, processing each lottery thr
 5. Stores current jackpots using `storePreviousJackpot()` — skipped when the fetch, the KV read, or the notification email failed, so errors never overwrite good state and missed notifications retry on the next run
 
 Data fetching functions:
+
 - **Mega Millions**: Calls official API endpoint for structured JSON data
 - **Powerball**: Scrapes HTML with multiple regex patterns for robustness
 - Return standardized data objects

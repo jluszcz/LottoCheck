@@ -1,15 +1,27 @@
 repos:
--   repo: https://github.com/pre-commit/pre-commit-hooks
+  - repo: https://github.com/pre-commit/pre-commit-hooks
     rev: v5.0.0
     hooks:
-    -   id: check-merge-conflict
-    -   id: check-toml
-    -   id: check-yaml
-    -   id: check-json
-    -   id: detect-aws-credentials
+      - id: check-merge-conflict
+      - id: check-toml
+      - id: check-yaml
+      - id: check-json
+      - id: detect-aws-credentials
         args:
-            - --allow-missing-credentials
-    -   id: end-of-file-fixer
-    -   id: file-contents-sorter
+          - --allow-missing-credentials
+      - id: end-of-file-fixer
+      - id: file-contents-sorter
         files: .gitignore
-    -   id: trailing-whitespace
+      - id: trailing-whitespace
+  - repo: local
+    hooks:
+      - id: prettier
+        name: prettier
+        entry: npx prettier --check .
+        language: system
+        pass_filenames: false
+      - id: eslint
+        name: eslint
+        entry: npx eslint .
+        language: system
+        pass_filenames: false

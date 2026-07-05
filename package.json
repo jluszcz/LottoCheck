@@ -1,24 +1,32 @@
 {
-  "name": "lottocheck",
-  "version": "1.0.0",
-  "description": "CloudFlare Worker to check lottery jackpots and send notifications",
-  "main": "src/index.js",
-  "scripts": {
-    "dev": "wrangler dev",
-    "deploy": "wrangler deploy",
-    "test": "vitest run",
-    "test:watch": "vitest"
-  },
-  "overrides": {
-    "undici": "^7.28.0",
-    "picomatch": "^4.0.4"
-  },
-  "devDependencies": {
-    "@cloudflare/vitest-pool-workers": "^0.16.19",
-    "@cloudflare/workers-types": "^4.20260317.1",
-    "@vitest/coverage-v8": "^4.1.9",
-    "typescript": "^6.0.3",
-    "vitest": "^4.1.2",
-    "wrangler": "^4.77.0"
-  }
+	"name": "lottocheck",
+	"version": "1.0.0",
+	"description": "CloudFlare Worker to check lottery jackpots and send notifications",
+	"main": "src/index.js",
+	"type": "module",
+	"scripts": {
+		"dev": "wrangler dev",
+		"deploy": "wrangler deploy",
+		"test": "vitest run",
+		"test:watch": "vitest",
+		"lint": "eslint .",
+		"format": "prettier --write .",
+		"format:check": "prettier --check ."
+	},
+	"overrides": {
+		"undici": "^7.28.0",
+		"picomatch": "^4.0.4"
+	},
+	"devDependencies": {
+		"@cloudflare/vitest-pool-workers": "^0.16.19",
+		"@cloudflare/workers-types": "^4.20260317.1",
+		"@eslint/js": "^10.0.1",
+		"@vitest/coverage-v8": "^4.1.9",
+		"eslint": "^10.6.0",
+		"globals": "^17.7.0",
+		"prettier": "3.9.4",
+		"typescript": "^6.0.3",
+		"vitest": "^4.1.2",
+		"wrangler": "^4.77.0"
+	}
 }
