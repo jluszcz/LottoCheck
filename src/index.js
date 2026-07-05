@@ -80,11 +80,10 @@ export async function storePreviousJackpot(kv, lotteryName, jackpotAmount) {
 	try {
 		const data = {
 			jackpotAmount,
-			lastChecked: new Date().toISOString()
+			lastChecked: new Date().toISOString(),
 		};
 
 		await kv.put(lotteryName, JSON.stringify(data));
-
 	} catch (error) {
 		// Log error but don't throw - storage failure shouldn't crash the worker
 		console.error(`Error storing jackpot for ${lotteryName}:`, error.message);
@@ -114,7 +113,7 @@ export function detectThresholdCrossing(previousAmount, currentAmount, threshold
 		crossed,
 		previousAmount,
 		currentAmount,
-		threshold: thresholdMillions
+		threshold: thresholdMillions,
 	};
 }
 
@@ -183,7 +182,7 @@ export function buildNotificationText(lotteryName, previousAmount, currentAmount
 		`Your threshold: ${formatJackpotDisplay(threshold)}`,
 		`Next drawing: ${nextDrawing}`,
 		'',
-		'This is an automated notification from LottoCheck.'
+		'This is an automated notification from LottoCheck.',
 	].join('\n');
 }
 
@@ -213,16 +212,15 @@ export async function sendEmail(emailBinding, fromEmail, toEmail, subject, htmlB
 			from: { email: fromEmail, name: 'LottoCheck' },
 			subject,
 			html: htmlBody,
-			text: textBody
+			text: textBody,
 		});
 
 		return { success: true, messageId: result?.messageId };
-
 	} catch (error) {
 		const code = error.code ? `${error.code}: ` : '';
 		return {
 			success: false,
-			error: `Email send failed: ${code}${error.message || error}`
+			error: `Email send failed: ${code}${error.message || error}`,
 		};
 	}
 }
@@ -290,9 +288,28 @@ async function processLottery(env, current, thresholdMillions) {
 		console.log(`THRESHOLD CROSSED: ${current.lottery} went from ${previousAmount}M to ${current.jackpotAmount}M`);
 
 		if (isEmailConfigured(env)) {
-			const html = buildNotificationEmail(current.lottery, previousAmount, current.jackpotAmount, thresholdMillions, current.nextDrawing);
-			const text = buildNotificationText(current.lottery, previousAmount, current.jackpotAmount, thresholdMillions, current.nextDrawing);
-			const result = await sendEmail(env.EMAIL, env.FROM_EMAIL, env.TO_EMAIL, `🎰 ${current.lottery} Jackpot Alert!`, html, text);
+			const html = buildNotificationEmail(
+				current.lottery,
+				previousAmount,
+				current.jackpotAmount,
+				thresholdMillions,
+				current.nextDrawing,
+			);
+			const text = buildNotificationText(
+				current.lottery,
+				previousAmount,
+				current.jackpotAmount,
+				thresholdMillions,
+				current.nextDrawing,
+			);
+			const result = await sendEmail(
+				env.EMAIL,
+				env.FROM_EMAIL,
+				env.TO_EMAIL,
+				`🎰 ${current.lottery} Jackpot Alert!`,
+				html,
+				text,
+			);
 
 			if (!result.success) {
 				console.error(`Email failed for ${current.lottery}, keeping previous state to retry next run:`, result.error);
@@ -310,33 +327,28 @@ export default {
 	 * HTTP handler - for testing purposes
 	 * @param {Request} request
 	 * @param {object} env - Environment variables
-	 * @param {ExecutionContext} ctx
 	 * @returns {Promise<Response>} JSON response with lottery data and threshold information
 	 */
-	async fetch(request, env, ctx) {
+	async fetch(request, env) {
 		try {
 			// Check both lotteries in parallel
-			const [megaMillions, powerball] = await Promise.all([
-				checkMegaMillions(),
-				checkPowerball()
-			]);
+			const [megaMillions, powerball] = await Promise.all([checkMegaMillions(), checkPowerball()]);
 
 			// Check against threshold and annotate results
 			const thresholdResults = checkThresholds(megaMillions, powerball, getThreshold(env));
 
 			const results = {
 				timestamp: new Date().toISOString(),
-				...thresholdResults
+				...thresholdResults,
 			};
 
 			return new Response(JSON.stringify(results, null, 2), {
-				headers: { 'Content-Type': 'application/json' }
+				headers: { 'Content-Type': 'application/json' },
 			});
-
 		} catch (error) {
 			return new Response(JSON.stringify({ error: error.message }, null, 2), {
 				status: 500,
-				headers: { 'Content-Type': 'application/json' }
+				headers: { 'Content-Type': 'application/json' },
 			});
 		}
 	},
@@ -345,25 +357,21 @@ export default {
 	 * Scheduled handler - runs on cron trigger
 	 * @param {ScheduledController} controller
 	 * @param {object} env - Environment variables
-	 * @param {ExecutionContext} ctx
 	 * @returns {Promise<void>} Logs jackpot data and sends notifications on threshold crossing
 	 */
-	async scheduled(controller, env, ctx) {
+	async scheduled(controller, env) {
 		console.log('LottoCheck: Starting jackpot check at', new Date().toISOString());
 
 		try {
 			// Fetch current jackpots in parallel
-			const [megaMillions, powerball] = await Promise.all([
-				checkMegaMillions(),
-				checkPowerball()
-			]);
+			const [megaMillions, powerball] = await Promise.all([checkMegaMillions(), checkPowerball()]);
 
 			const thresholdMillions = getThreshold(env);
 
 			// Detect crossings, notify, and update stored state per lottery
 			await Promise.all([
 				processLottery(env, megaMillions, thresholdMillions),
-				processLottery(env, powerball, thresholdMillions)
+				processLottery(env, powerball, thresholdMillions),
 			]);
 
 			// Log annotated results
@@ -373,13 +381,14 @@ export default {
 			console.log('Threshold:', results.threshold);
 
 			if (results.threshold.exceeded) {
-				console.log(`ALERT: ${results.threshold.exceedingLotteries.join(' and ')} exceeded threshold of ${results.threshold.display}`);
+				console.log(
+					`ALERT: ${results.threshold.exceedingLotteries.join(' and ')} exceeded threshold of ${results.threshold.display}`,
+				);
 			}
-
 		} catch (error) {
 			console.error('Error checking jackpots:', error);
 		}
-	}
+	},
 };
 
 /**
@@ -404,12 +413,12 @@ function formatJackpotDisplay(amountInMillions) {
  */
 function checkThresholds(megaMillions, powerball, thresholdMillions) {
 	// Check each lottery against threshold (only if no error and valid number)
-	const megaExceeds = !megaMillions.error &&
+	const megaExceeds =
+		!megaMillions.error &&
 		typeof megaMillions.jackpotAmount === 'number' &&
 		megaMillions.jackpotAmount >= thresholdMillions;
-	const powerballExceeds = !powerball.error &&
-		typeof powerball.jackpotAmount === 'number' &&
-		powerball.jackpotAmount >= thresholdMillions;
+	const powerballExceeds =
+		!powerball.error && typeof powerball.jackpotAmount === 'number' && powerball.jackpotAmount >= thresholdMillions;
 
 	// Build list of lotteries that exceed threshold
 	const exceedingLotteries = [];
@@ -419,18 +428,18 @@ function checkThresholds(megaMillions, powerball, thresholdMillions) {
 	return {
 		megaMillions: {
 			...megaMillions,
-			exceedsThreshold: megaExceeds
+			exceedsThreshold: megaExceeds,
 		},
 		powerball: {
 			...powerball,
-			exceedsThreshold: powerballExceeds
+			exceedsThreshold: powerballExceeds,
 		},
 		threshold: {
 			amount: thresholdMillions,
 			display: formatJackpotDisplay(thresholdMillions),
 			exceeded: exceedingLotteries.length > 0,
-			exceedingLotteries
-		}
+			exceedingLotteries,
+		},
 	};
 }
 
@@ -443,9 +452,9 @@ async function checkMegaMillions() {
 		const response = await fetch('https://www.megamillions.com/cmspages/utilservice.asmx/GetLatestDrawData', {
 			method: 'POST',
 			headers: {
-				'Content-Type': 'application/json'
+				'Content-Type': 'application/json',
 			},
-			body: '{}'
+			body: '{}',
 		});
 
 		if (!response.ok) {
@@ -469,23 +478,22 @@ async function checkMegaMillions() {
 			weekday: 'short',
 			month: 'short',
 			day: 'numeric',
-			year: 'numeric'
+			year: 'numeric',
 		});
 
 		return {
 			lottery: 'Mega Millions',
 			jackpot,
 			jackpotAmount,
-			nextDrawing
+			nextDrawing,
 		};
-
 	} catch (error) {
 		return {
 			lottery: 'Mega Millions',
 			jackpot: 'Error',
 			jackpotAmount: 0,
 			nextDrawing: 'Error',
-			error: error.message
+			error: error.message,
 		};
 	}
 }
@@ -514,7 +522,7 @@ async function checkPowerball() {
 		const jackpotPatterns = [
 			/game-jackpot-number[^>]*>\s*\$([0-9,.]+)\s*(Million|Billion)/i,
 			/Estimated Jackpot:?[\s\S]{0,200}?\$([0-9,.]+)\s*(Million|Billion)/i,
-			/Jackpot:\s*\$([0-9,.]+)\s*(Million|Billion)/i
+			/Jackpot:\s*\$([0-9,.]+)\s*(Million|Billion)/i,
 		];
 
 		let jackpot = null;
@@ -538,9 +546,9 @@ async function checkPowerball() {
 		// Note: Must match "Next Drawing" to avoid matching past drawing dates
 		const drawingPatterns = [
 			/Next Drawing[^>]*>[\s\S]{0,100}?([A-Za-z]{3},\s*[A-Za-z]{3}\s*\d{1,2},\s*\d{4})/i, // Abbreviated with tags/whitespace
-			/Next Drawing[^:]*:\s*([A-Za-z]{3},\s*[A-Za-z]{3}\s*\d{1,2},\s*\d{4})/i,           // Abbreviated with colon
-			/Next Drawing[^:]*:\s*([A-Za-z]+,\s*[A-Za-z]+\s*\d+,\s*\d{4})/i,                   // Full format with colon
-			/Next Drawing[\s\S]{0,100}?([A-Za-z]{3},\s*[A-Za-z]{3}\s*\d{1,2},\s*\d{4})/i     // Abbreviated (flexible whitespace)
+			/Next Drawing[^:]*:\s*([A-Za-z]{3},\s*[A-Za-z]{3}\s*\d{1,2},\s*\d{4})/i, // Abbreviated with colon
+			/Next Drawing[^:]*:\s*([A-Za-z]+,\s*[A-Za-z]+\s*\d+,\s*\d{4})/i, // Full format with colon
+			/Next Drawing[\s\S]{0,100}?([A-Za-z]{3},\s*[A-Za-z]{3}\s*\d{1,2},\s*\d{4})/i, // Abbreviated (flexible whitespace)
 		];
 
 		let nextDrawing = null;
@@ -559,7 +567,7 @@ async function checkPowerball() {
 				jackpot: 'Not found',
 				jackpotAmount: 0,
 				nextDrawing: nextDrawing || 'Not found',
-				error: 'Failed to parse jackpot from HTML'
+				error: 'Failed to parse jackpot from HTML',
 			};
 		}
 
@@ -567,16 +575,15 @@ async function checkPowerball() {
 			lottery: 'Powerball',
 			jackpot,
 			jackpotAmount,
-			nextDrawing: nextDrawing || 'Not found'
+			nextDrawing: nextDrawing || 'Not found',
 		};
-
 	} catch (error) {
 		return {
 			lottery: 'Powerball',
 			jackpot: 'Error',
 			jackpotAmount: 0,
 			nextDrawing: 'Error',
-			error: error.message
+			error: error.message,
 		};
 	}
 }

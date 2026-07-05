@@ -8,7 +8,7 @@ import worker, {
 	buildNotificationEmail,
 	buildNotificationText,
 	sendEmail,
-	isEmailConfigured
+	isEmailConfigured,
 } from './index.js';
 
 /**
@@ -27,14 +27,17 @@ let originalConsoleLog;
 beforeEach(() => {
 	originalConsoleLog = console.log;
 	fetchHandlers = new Map();
-	vi.stubGlobal('fetch', vi.fn(async (input, init) => {
-		const url = typeof input === 'string' ? input : input.url;
-		const handler = fetchHandlers.get(new URL(url).origin);
-		if (!handler) {
-			throw new Error(`Unexpected fetch to ${url}`);
-		}
-		return handler(url, init);
-	}));
+	vi.stubGlobal(
+		'fetch',
+		vi.fn(async (input, init) => {
+			const url = typeof input === 'string' ? input : input.url;
+			const handler = fetchHandlers.get(new URL(url).origin);
+			if (!handler) {
+				throw new Error(`Unexpected fetch to ${url}`);
+			}
+			return handler(url, init);
+		}),
+	);
 });
 
 afterEach(() => {
@@ -75,8 +78,8 @@ function megaMillionsBody(jackpotAmount, drawingDate = fixtures.dates.default) {
 	return JSON.stringify({
 		d: JSON.stringify({
 			Jackpot: { NextPrizePool: jackpotAmount },
-			NextDrawingDate: drawingDate
-		})
+			NextDrawingDate: drawingDate,
+		}),
 	});
 }
 
@@ -116,7 +119,7 @@ function mockPowerball(html, status = 200) {
  */
 function mockLotteries({
 	megaMillionsJackpot = fixtures.megaMillions.billion.amount,
-	powerballJackpot = fixtures.powerball.billion
+	powerballJackpot = fixtures.powerball.billion,
 } = {}) {
 	mockMegaMillions(megaMillionsBody(megaMillionsJackpot));
 	mockPowerball(powerballHtml(powerballJackpot));
@@ -128,15 +131,13 @@ function mockLotteries({
  * @returns {Object} Mock KV namespace with get/put methods and _storage map
  */
 function createMockKV(initialData = {}) {
-	const storage = new Map(
-		Object.entries(initialData).map(([key, value]) => [key, JSON.stringify(value)])
-	);
+	const storage = new Map(Object.entries(initialData).map(([key, value]) => [key, JSON.stringify(value)]));
 	return {
 		get: vi.fn(async (key) => storage.get(key) || null),
 		put: vi.fn(async (key, value) => {
 			storage.set(key, value);
 		}),
-		_storage: storage
+		_storage: storage,
 	};
 }
 
@@ -159,7 +160,7 @@ function createMockEnv(overrides = {}) {
 	return {
 		JACKPOT_THRESHOLD: '1500',
 		LOTTERY_STATE: createMockKV(),
-		...overrides
+		...overrides,
 	};
 }
 
@@ -248,9 +249,9 @@ describe('LottoCheck Worker', () => {
 			await worker.scheduled(controller, createMockEnv(), ctx);
 			await waitOnExecutionContext(ctx);
 
-			expect(consoleLogs.some(log => log.includes('LottoCheck: Starting jackpot check'))).toBe(true);
-			expect(consoleLogs.some(log => log.includes('Mega Millions:'))).toBe(true);
-			expect(consoleLogs.some(log => log.includes('Powerball:'))).toBe(true);
+			expect(consoleLogs.some((log) => log.includes('LottoCheck: Starting jackpot check'))).toBe(true);
+			expect(consoleLogs.some((log) => log.includes('Mega Millions:'))).toBe(true);
+			expect(consoleLogs.some((log) => log.includes('Powerball:'))).toBe(true);
 		});
 
 		it('logs alert when threshold is exceeded', async () => {
@@ -261,7 +262,7 @@ describe('LottoCheck Worker', () => {
 
 			mockLotteries({
 				megaMillionsJackpot: fixtures.megaMillions.twoBillion.amount,
-				powerballJackpot: fixtures.powerball.twoBillion
+				powerballJackpot: fixtures.powerball.twoBillion,
 			});
 
 			const controller = createScheduledController();
@@ -270,8 +271,8 @@ describe('LottoCheck Worker', () => {
 			await worker.scheduled(controller, createMockEnv(), ctx);
 			await waitOnExecutionContext(ctx);
 
-			expect(consoleLogs.some(log => log.includes('ALERT:'))).toBe(true);
-			expect(consoleLogs.some(log => log.includes('exceeded threshold'))).toBe(true);
+			expect(consoleLogs.some((log) => log.includes('ALERT:'))).toBe(true);
+			expect(consoleLogs.some((log) => log.includes('exceeded threshold'))).toBe(true);
 		});
 
 		it('logs threshold crossing', async () => {
@@ -285,8 +286,8 @@ describe('LottoCheck Worker', () => {
 			const mockEnv = createMockEnv({
 				LOTTERY_STATE: createMockKV({
 					'Mega Millions': { jackpotAmount: 1000, lastChecked: '2025-01-01' },
-					'Powerball': { jackpotAmount: 1000, lastChecked: '2025-01-01' }
-				})
+					Powerball: { jackpotAmount: 1000, lastChecked: '2025-01-01' },
+				}),
 			});
 
 			const controller = createScheduledController();
@@ -295,7 +296,7 @@ describe('LottoCheck Worker', () => {
 			await worker.scheduled(controller, mockEnv, ctx);
 			await waitOnExecutionContext(ctx);
 
-			expect(consoleLogs.some(log => log.includes('THRESHOLD CROSSED: Mega Millions'))).toBe(true);
+			expect(consoleLogs.some((log) => log.includes('THRESHOLD CROSSED: Mega Millions'))).toBe(true);
 		});
 	});
 
@@ -322,11 +323,11 @@ describe('LottoCheck Worker', () => {
 			const mockEnv = createMockEnv({
 				LOTTERY_STATE: createMockKV({
 					'Mega Millions': { jackpotAmount: 1000, lastChecked: '2025-01-01' },
-					'Powerball': { jackpotAmount: 1000, lastChecked: '2025-01-01' }
+					Powerball: { jackpotAmount: 1000, lastChecked: '2025-01-01' },
 				}),
 				EMAIL: email,
 				FROM_EMAIL: 'from@test.com',
-				TO_EMAIL: 'to@test.com'
+				TO_EMAIL: 'to@test.com',
 			});
 
 			const controller = createScheduledController();
@@ -351,18 +352,18 @@ describe('LottoCheck Worker', () => {
 		it('does not send email when staying above threshold', async () => {
 			mockLotteries({
 				megaMillionsJackpot: fixtures.megaMillions.twoBillion.amount,
-				powerballJackpot: fixtures.powerball.twoBillion
+				powerballJackpot: fixtures.powerball.twoBillion,
 			});
 
 			const email = createMockEmail();
 			const mockEnv = createMockEnv({
 				LOTTERY_STATE: createMockKV({
 					'Mega Millions': { jackpotAmount: 1700, lastChecked: '2025-01-01' },
-					'Powerball': { jackpotAmount: 1700, lastChecked: '2025-01-01' }
+					Powerball: { jackpotAmount: 1700, lastChecked: '2025-01-01' },
 				}),
 				EMAIL: email,
 				FROM_EMAIL: 'from@test.com',
-				TO_EMAIL: 'to@test.com'
+				TO_EMAIL: 'to@test.com',
 			});
 
 			const controller = createScheduledController();
@@ -381,9 +382,7 @@ describe('LottoCheck Worker', () => {
 			const controller = createScheduledController();
 			const ctx = createExecutionContext();
 
-			await expect(
-				worker.scheduled(controller, mockEnv, ctx)
-			).resolves.not.toThrow();
+			await expect(worker.scheduled(controller, mockEnv, ctx)).resolves.not.toThrow();
 			await waitOnExecutionContext(ctx);
 		});
 
@@ -395,11 +394,11 @@ describe('LottoCheck Worker', () => {
 			const mockEnv = createMockEnv({
 				LOTTERY_STATE: createMockKV({
 					'Mega Millions': { jackpotAmount: 1000, lastChecked: '2025-01-01' },
-					'Powerball': { jackpotAmount: 400, lastChecked: '2025-01-01' }
+					Powerball: { jackpotAmount: 400, lastChecked: '2025-01-01' },
 				}),
 				EMAIL: email,
 				FROM_EMAIL: 'from@test.com',
-				TO_EMAIL: 'to@test.com'
+				TO_EMAIL: 'to@test.com',
 			});
 
 			const controller = createScheduledController();
@@ -421,7 +420,7 @@ describe('LottoCheck Worker', () => {
 
 			const email = createMockEmail();
 			const kv = createMockKV({
-				'Powerball': { jackpotAmount: 400, lastChecked: '2025-01-01' }
+				Powerball: { jackpotAmount: 400, lastChecked: '2025-01-01' },
 			});
 			const workingGet = kv.get.getMockImplementation();
 			kv.get = vi.fn(async (key) => {
@@ -434,7 +433,7 @@ describe('LottoCheck Worker', () => {
 				LOTTERY_STATE: kv,
 				EMAIL: email,
 				FROM_EMAIL: 'from@test.com',
-				TO_EMAIL: 'to@test.com'
+				TO_EMAIL: 'to@test.com',
 			});
 
 			const controller = createScheduledController();
@@ -479,8 +478,8 @@ describe('LottoCheck Worker', () => {
 
 			const mockEnv = createMockEnv({
 				LOTTERY_STATE: createMockKV({
-					'Mega Millions': { jackpotAmount: 1700, lastChecked: '2025-01-01' }
-				})
+					'Mega Millions': { jackpotAmount: 1700, lastChecked: '2025-01-01' },
+				}),
 			});
 
 			const controller = createScheduledController();
@@ -502,8 +501,8 @@ describe('LottoCheck Worker', () => {
 
 			const mockEnv = createMockEnv({
 				LOTTERY_STATE: createMockKV({
-					'Mega Millions': { jackpotAmount: 1000, lastChecked: '2025-01-01' }
-				})
+					'Mega Millions': { jackpotAmount: 1000, lastChecked: '2025-01-01' },
+				}),
 			});
 
 			const controller = createScheduledController();
@@ -521,7 +520,7 @@ describe('Threshold checking', () => {
 	it('correctly identifies when jackpots exceed threshold', async () => {
 		mockLotteries({
 			megaMillionsJackpot: fixtures.megaMillions.twoBillion.amount,
-			powerballJackpot: fixtures.powerball.twoBillion
+			powerballJackpot: fixtures.powerball.twoBillion,
 		});
 
 		const request = new Request('http://localhost');
@@ -539,7 +538,7 @@ describe('Threshold checking', () => {
 	it('correctly identifies when jackpots do not exceed threshold', async () => {
 		mockLotteries({
 			megaMillionsJackpot: fixtures.megaMillions.halfBillion.amount,
-			powerballJackpot: '$400 Million'
+			powerballJackpot: '$400 Million',
 		});
 
 		const request = new Request('http://localhost');
@@ -556,7 +555,7 @@ describe('Threshold checking', () => {
 	it('uses default threshold when env var is invalid', async () => {
 		mockLotteries({
 			megaMillionsJackpot: 1600000000,
-			powerballJackpot: '$400 Million'
+			powerballJackpot: '$400 Million',
 		});
 
 		const request = new Request('http://localhost');
@@ -572,7 +571,7 @@ describe('Threshold checking', () => {
 	it('formats threshold display correctly for billions', async () => {
 		mockLotteries({
 			megaMillionsJackpot: fixtures.megaMillions.halfBillion.amount,
-			powerballJackpot: '$400 Million'
+			powerballJackpot: '$400 Million',
 		});
 
 		const request = new Request('http://localhost');
@@ -586,7 +585,7 @@ describe('Threshold checking', () => {
 	it('formats threshold display correctly for millions', async () => {
 		mockLotteries({
 			megaMillionsJackpot: fixtures.megaMillions.halfBillion.amount,
-			powerballJackpot: '$400 Million'
+			powerballJackpot: '$400 Million',
 		});
 
 		const request = new Request('http://localhost');
@@ -876,7 +875,7 @@ describe('KV Storage', () => {
 
 		it('returns stored value when key exists', async () => {
 			const mockKV = createMockKV({
-				'Mega Millions': { jackpotAmount: 1500, lastChecked: '2025-12-25T20:00:00.000Z' }
+				'Mega Millions': { jackpotAmount: 1500, lastChecked: '2025-12-25T20:00:00.000Z' },
 			});
 
 			const result = await getPreviousJackpot(mockKV, 'Mega Millions');
@@ -902,7 +901,7 @@ describe('KV Storage', () => {
 
 		it('returns 0 when stored jackpotAmount is not a number', async () => {
 			const mockKV = createMockKV({
-				'Powerball': { jackpotAmount: '1500', lastChecked: '2025-12-25T20:00:00.000Z' }
+				Powerball: { jackpotAmount: '1500', lastChecked: '2025-12-25T20:00:00.000Z' },
 			});
 
 			const result = await getPreviousJackpot(mockKV, 'Powerball');
@@ -932,7 +931,7 @@ describe('KV Storage', () => {
 
 		it('handles missing jackpotAmount field', async () => {
 			const mockKV = createMockKV({
-				'Powerball': { lastChecked: '2025-12-25T20:00:00.000Z' }
+				Powerball: { lastChecked: '2025-12-25T20:00:00.000Z' },
 			});
 
 			const result = await getPreviousJackpot(mockKV, 'Powerball');
@@ -969,21 +968,17 @@ describe('KV Storage', () => {
 		});
 
 		it('handles undefined KV namespace gracefully', async () => {
-			await expect(
-				storePreviousJackpot(undefined, 'Mega Millions', 1700)
-			).resolves.toBeUndefined();
+			await expect(storePreviousJackpot(undefined, 'Mega Millions', 1700)).resolves.toBeUndefined();
 		});
 
 		it('handles KV put errors gracefully', async () => {
 			const mockKV = {
-				put: vi.fn().mockRejectedValue(new Error('KV write failed'))
+				put: vi.fn().mockRejectedValue(new Error('KV write failed')),
 			};
 
 			const consoleErrorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
 
-			await expect(
-				storePreviousJackpot(mockKV, 'Powerball', 1500)
-			).resolves.toBeUndefined();
+			await expect(storePreviousJackpot(mockKV, 'Powerball', 1500)).resolves.toBeUndefined();
 
 			expect(consoleErrorSpy).toHaveBeenCalled();
 
@@ -1160,7 +1155,7 @@ describe('sendEmail', () => {
 			'to@example.com',
 			'Test Subject',
 			'<html>Test Body</html>',
-			'Test Body'
+			'Test Body',
 		);
 
 		expect(result.success).toBe(true);
@@ -1178,7 +1173,7 @@ describe('sendEmail', () => {
 			'recipient@domain.com',
 			'Jackpot Alert',
 			'<html>Email Content</html>',
-			'Email Content'
+			'Email Content',
 		);
 
 		const message = email.send.mock.calls[0][0];
@@ -1194,14 +1189,7 @@ describe('sendEmail', () => {
 		error.code = 'E_SENDER_NOT_VERIFIED';
 		const email = createMockEmail(vi.fn().mockRejectedValue(error));
 
-		const result = await sendEmail(
-			email,
-			'from@example.com',
-			'to@example.com',
-			'Test',
-			'<html>Test</html>',
-			'Test'
-		);
+		const result = await sendEmail(email, 'from@example.com', 'to@example.com', 'Test', '<html>Test</html>', 'Test');
 
 		expect(result.success).toBe(false);
 		expect(result.error).toContain('E_SENDER_NOT_VERIFIED');
@@ -1211,14 +1199,7 @@ describe('sendEmail', () => {
 	it('handles the binding rejecting with a plain error', async () => {
 		const email = createMockEmail(vi.fn().mockRejectedValue(new Error('Network timeout')));
 
-		const result = await sendEmail(
-			email,
-			'from@example.com',
-			'to@example.com',
-			'Test',
-			'<html>Test</html>',
-			'Test'
-		);
+		const result = await sendEmail(email, 'from@example.com', 'to@example.com', 'Test', '<html>Test</html>', 'Test');
 
 		expect(result.success).toBe(false);
 		expect(result.error).toContain('Email send failed');
@@ -1228,14 +1209,7 @@ describe('sendEmail', () => {
 	it('handles the binding rejecting with non-Error values', async () => {
 		const email = createMockEmail(vi.fn().mockRejectedValue('String error'));
 
-		const result = await sendEmail(
-			email,
-			'from@example.com',
-			'to@example.com',
-			'Test',
-			'<html>Test</html>',
-			'Test'
-		);
+		const result = await sendEmail(email, 'from@example.com', 'to@example.com', 'Test', '<html>Test</html>', 'Test');
 
 		expect(result.success).toBe(false);
 		expect(result.error).toBeDefined();
@@ -1246,32 +1220,40 @@ describe('isEmailConfigured', () => {
 	const emailBinding = { send: () => {} };
 
 	it('returns true when the binding and both addresses are set', () => {
-		expect(isEmailConfigured({
-			EMAIL: emailBinding,
-			FROM_EMAIL: 'from@example.com',
-			TO_EMAIL: 'to@example.com'
-		})).toBe(true);
+		expect(
+			isEmailConfigured({
+				EMAIL: emailBinding,
+				FROM_EMAIL: 'from@example.com',
+				TO_EMAIL: 'to@example.com',
+			}),
+		).toBe(true);
 	});
 
 	it('returns false when the EMAIL binding is missing', () => {
-		expect(isEmailConfigured({
-			FROM_EMAIL: 'from@example.com',
-			TO_EMAIL: 'to@example.com'
-		})).toBe(false);
+		expect(
+			isEmailConfigured({
+				FROM_EMAIL: 'from@example.com',
+				TO_EMAIL: 'to@example.com',
+			}),
+		).toBe(false);
 	});
 
 	it('returns false when FROM_EMAIL is missing', () => {
-		expect(isEmailConfigured({
-			EMAIL: emailBinding,
-			TO_EMAIL: 'to@example.com'
-		})).toBe(false);
+		expect(
+			isEmailConfigured({
+				EMAIL: emailBinding,
+				TO_EMAIL: 'to@example.com',
+			}),
+		).toBe(false);
 	});
 
 	it('returns false when TO_EMAIL is missing', () => {
-		expect(isEmailConfigured({
-			EMAIL: emailBinding,
-			FROM_EMAIL: 'from@example.com'
-		})).toBe(false);
+		expect(
+			isEmailConfigured({
+				EMAIL: emailBinding,
+				FROM_EMAIL: 'from@example.com',
+			}),
+		).toBe(false);
 	});
 
 	it('returns false when everything is missing', () => {
@@ -1287,18 +1269,22 @@ describe('isEmailConfigured', () => {
 	});
 
 	it('returns false when FROM_EMAIL is empty string', () => {
-		expect(isEmailConfigured({
-			EMAIL: emailBinding,
-			FROM_EMAIL: '',
-			TO_EMAIL: 'to@example.com'
-		})).toBe(false);
+		expect(
+			isEmailConfigured({
+				EMAIL: emailBinding,
+				FROM_EMAIL: '',
+				TO_EMAIL: 'to@example.com',
+			}),
+		).toBe(false);
 	});
 
 	it('returns false when TO_EMAIL is empty string', () => {
-		expect(isEmailConfigured({
-			EMAIL: emailBinding,
-			FROM_EMAIL: 'from@example.com',
-			TO_EMAIL: ''
-		})).toBe(false);
+		expect(
+			isEmailConfigured({
+				EMAIL: emailBinding,
+				FROM_EMAIL: 'from@example.com',
+				TO_EMAIL: '',
+			}),
+		).toBe(false);
 	});
 });
