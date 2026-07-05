@@ -5,10 +5,9 @@ import worker, {
 	getPreviousJackpot,
 	storePreviousJackpot,
 	detectThresholdCrossing,
-	buildNotificationEmail,
-	buildNotificationText,
-	sendEmail,
-	isEmailConfigured,
+	buildNotificationMessage,
+	sendNtfyNotification,
+	isNtfyConfigured,
 } from './index.js';
 
 /**
@@ -142,12 +141,17 @@ function createMockKV(initialData = {}) {
 }
 
 /**
- * Create a mock send_email binding
- * @param {Function} [send] - Optional custom send implementation
- * @returns {Object} Mock binding with a send() spy
+ * Route ntfy publish requests to a mock response and record them
+ * @param {number} [status=200] - Response status
+ * @returns {{requests: Array<{url: string, init: Object}>}} Recorded requests
  */
-function createMockEmail(send = vi.fn().mockResolvedValue({ messageId: 'test-message-id' })) {
-	return { send };
+function mockNtfy(status = 200) {
+	const requests = [];
+	fetchHandlers.set('https://ntfy.sh', (url, init) => {
+		requests.push({ url, init });
+		return new Response('{}', { status });
+	});
+	return { requests };
 }
 
 /**
@@ -300,7 +304,7 @@ describe('LottoCheck Worker', () => {
 		});
 	});
 
-	describe('Integration - KV and Email', () => {
+	describe('Integration - KV and notifications', () => {
 		it('stores jackpots in KV after check', async () => {
 			mockLotteries();
 			const mockEnv = createMockEnv();
@@ -315,19 +319,17 @@ describe('LottoCheck Worker', () => {
 			expect(mockEnv.LOTTERY_STATE.put).toHaveBeenCalledWith('Powerball', expect.any(String));
 		});
 
-		it('sends email on threshold crossing', async () => {
+		it('sends a notification on threshold crossing', async () => {
 			mockMegaMillions(megaMillionsBody(fixtures.megaMillions.twoBillion.amount));
 			mockPowerball(powerballHtml(fixtures.powerball.halfBillion));
 
-			const email = createMockEmail();
+			const ntfy = mockNtfy();
 			const mockEnv = createMockEnv({
 				LOTTERY_STATE: createMockKV({
 					'Mega Millions': { jackpotAmount: 1000, lastChecked: '2025-01-01' },
 					Powerball: { jackpotAmount: 1000, lastChecked: '2025-01-01' },
 				}),
-				EMAIL: email,
-				FROM_EMAIL: 'from@test.com',
-				TO_EMAIL: 'to@test.com',
+				NTFY_TOPIC: 'test-topic',
 			});
 
 			const controller = createScheduledController();
@@ -336,34 +338,31 @@ describe('LottoCheck Worker', () => {
 			await worker.scheduled(controller, mockEnv, ctx);
 			await waitOnExecutionContext(ctx);
 
-			expect(email.send).toHaveBeenCalledTimes(1);
-			const message = email.send.mock.calls[0][0];
-			expect(message.to).toBe('to@test.com');
-			expect(message.from.email).toBe('from@test.com');
-			expect(message.subject).toContain('Mega Millions');
-			expect(message.html).toContain('$2.00 Billion');
-			expect(message.text).toContain('$2.00 Billion');
+			expect(ntfy.requests).toHaveLength(1);
+			const { url, init } = ntfy.requests[0];
+			expect(url).toBe('https://ntfy.sh/test-topic');
+			expect(init.method).toBe('POST');
+			expect(init.headers.Title).toContain('Mega Millions');
+			expect(init.body).toContain('$2.00 Billion');
 
 			// State is stored after a successful notification
 			expect(mockEnv.LOTTERY_STATE.put).toHaveBeenCalledWith('Mega Millions', expect.any(String));
 			expect(JSON.parse(mockEnv.LOTTERY_STATE._storage.get('Mega Millions')).jackpotAmount).toBe(2000);
 		});
 
-		it('does not send email when staying above threshold', async () => {
+		it('does not send a notification when staying above threshold', async () => {
 			mockLotteries({
 				megaMillionsJackpot: fixtures.megaMillions.twoBillion.amount,
 				powerballJackpot: fixtures.powerball.twoBillion,
 			});
 
-			const email = createMockEmail();
+			const ntfy = mockNtfy();
 			const mockEnv = createMockEnv({
 				LOTTERY_STATE: createMockKV({
 					'Mega Millions': { jackpotAmount: 1700, lastChecked: '2025-01-01' },
 					Powerball: { jackpotAmount: 1700, lastChecked: '2025-01-01' },
 				}),
-				EMAIL: email,
-				FROM_EMAIL: 'from@test.com',
-				TO_EMAIL: 'to@test.com',
+				NTFY_TOPIC: 'test-topic',
 			});
 
 			const controller = createScheduledController();
@@ -372,7 +371,7 @@ describe('LottoCheck Worker', () => {
 			await worker.scheduled(controller, mockEnv, ctx);
 			await waitOnExecutionContext(ctx);
 
-			expect(email.send).not.toHaveBeenCalled();
+			expect(ntfy.requests).toHaveLength(0);
 		});
 
 		it('handles KV namespace being undefined', async () => {
@@ -386,19 +385,17 @@ describe('LottoCheck Worker', () => {
 			await waitOnExecutionContext(ctx);
 		});
 
-		it('keeps previous state when email fails so the crossing retries next run', async () => {
+		it('keeps previous state when the notification fails so the crossing retries next run', async () => {
 			mockMegaMillions(megaMillionsBody(fixtures.megaMillions.twoBillion.amount));
 			mockPowerball(powerballHtml(fixtures.powerball.halfBillion));
 
-			const email = createMockEmail(vi.fn().mockRejectedValue(new Error('E_DELIVERY_FAILED')));
+			mockNtfy(500);
 			const mockEnv = createMockEnv({
 				LOTTERY_STATE: createMockKV({
 					'Mega Millions': { jackpotAmount: 1000, lastChecked: '2025-01-01' },
 					Powerball: { jackpotAmount: 400, lastChecked: '2025-01-01' },
 				}),
-				EMAIL: email,
-				FROM_EMAIL: 'from@test.com',
-				TO_EMAIL: 'to@test.com',
+				NTFY_TOPIC: 'test-topic',
 			});
 
 			const controller = createScheduledController();
@@ -407,8 +404,8 @@ describe('LottoCheck Worker', () => {
 			await worker.scheduled(controller, mockEnv, ctx);
 			await waitOnExecutionContext(ctx);
 
-			// Mega Millions crossed but the email failed: its state must not be
-			// updated, so the crossing is detected again on the next run
+			// Mega Millions crossed but the notification failed: its state must not
+			// be updated, so the crossing is detected again on the next run
 			expect(mockEnv.LOTTERY_STATE.put).not.toHaveBeenCalledWith('Mega Millions', expect.any(String));
 			// Powerball did not cross, so its state updates normally
 			expect(mockEnv.LOTTERY_STATE.put).toHaveBeenCalledWith('Powerball', expect.any(String));
@@ -418,7 +415,7 @@ describe('LottoCheck Worker', () => {
 			mockMegaMillions(megaMillionsBody(fixtures.megaMillions.twoBillion.amount));
 			mockPowerball(powerballHtml(fixtures.powerball.halfBillion));
 
-			const email = createMockEmail();
+			const ntfy = mockNtfy();
 			const kv = createMockKV({
 				Powerball: { jackpotAmount: 400, lastChecked: '2025-01-01' },
 			});
@@ -431,9 +428,7 @@ describe('LottoCheck Worker', () => {
 			});
 			const mockEnv = createMockEnv({
 				LOTTERY_STATE: kv,
-				EMAIL: email,
-				FROM_EMAIL: 'from@test.com',
-				TO_EMAIL: 'to@test.com',
+				NTFY_TOPIC: 'test-topic',
 			});
 
 			const controller = createScheduledController();
@@ -444,7 +439,7 @@ describe('LottoCheck Worker', () => {
 
 			// Mega Millions is above threshold but its previous amount is unknown:
 			// no alert (it may not be a fresh crossing) and no state overwrite
-			expect(email.send).not.toHaveBeenCalled();
+			expect(ntfy.requests).toHaveLength(0);
 			expect(kv.put).not.toHaveBeenCalledWith('Mega Millions', expect.any(String));
 			// Powerball is unaffected and updates normally
 			expect(kv.put).toHaveBeenCalledWith('Powerball', expect.any(String));
@@ -495,7 +490,7 @@ describe('LottoCheck Worker', () => {
 			expect(JSON.parse(mockEnv.LOTTERY_STATE._storage.get('Mega Millions')).jackpotAmount).toBe(1700);
 		});
 
-		it('stores jackpots on crossing when email is not configured', async () => {
+		it('stores jackpots on crossing when notifications are not configured', async () => {
 			mockMegaMillions(megaMillionsBody(fixtures.megaMillions.twoBillion.amount));
 			mockPowerball(powerballHtml(fixtures.powerball.halfBillion));
 
@@ -1041,94 +1036,9 @@ describe('detectThresholdCrossing', () => {
 	});
 });
 
-describe('buildNotificationEmail', () => {
-	it('generates valid HTML email with all required elements', () => {
-		const html = buildNotificationEmail('Mega Millions', 1000, 1700, 1500, 'Fri, Dec 26, 2025');
-
-		expect(html).toContain('<!DOCTYPE html>');
-		expect(html).toContain('<html>');
-		expect(html).toContain('</html>');
-		expect(html).toContain('<body>');
-		expect(html).toContain('</body>');
-	});
-
-	it('includes lottery name in email content', () => {
-		const html = buildNotificationEmail('Mega Millions', 1000, 1700, 1500, 'Fri, Dec 26, 2025');
-
-		expect(html).toContain('Mega Millions');
-		expect(html).toContain('has crossed your threshold');
-	});
-
-	it('displays previous amount correctly formatted', () => {
-		const html = buildNotificationEmail('Powerball', 1000, 1700, 1500, 'Sat, Dec 27, 2025');
-
-		expect(html).toContain('Previous');
-		expect(html).toContain('$1.00 Billion');
-	});
-
-	it('displays current amount correctly formatted', () => {
-		const html = buildNotificationEmail('Mega Millions', 1000, 1700, 1500, 'Fri, Dec 26, 2025');
-
-		expect(html).toContain('Current');
-		expect(html).toContain('$1.70 Billion');
-	});
-
-	it('displays threshold correctly formatted', () => {
-		const html = buildNotificationEmail('Mega Millions', 1000, 1700, 1500, 'Fri, Dec 26, 2025');
-
-		expect(html).toContain('Your threshold');
-		expect(html).toContain('$1.50 Billion');
-	});
-
-	it('includes next drawing date', () => {
-		const html = buildNotificationEmail('Powerball', 1000, 1800, 1500, 'Saturday, Dec 28, 2025');
-
-		expect(html).toContain('Next drawing');
-		expect(html).toContain('Saturday, Dec 28, 2025');
-	});
-
-	it('formats amounts in millions correctly', () => {
-		const html = buildNotificationEmail('Mega Millions', 450, 650, 500, 'Fri, Dec 26, 2025');
-
-		expect(html).toContain('$450 Million');
-		expect(html).toContain('$650 Million');
-		expect(html).toContain('$500 Million');
-	});
-
-	it('formats amounts in billions correctly', () => {
-		const html = buildNotificationEmail('Powerball', 1500, 2000, 1800, 'Sat, Dec 27, 2025');
-
-		expect(html).toContain('$1.50 Billion');
-		expect(html).toContain('$2.00 Billion');
-		expect(html).toContain('$1.80 Billion');
-	});
-
-	it('includes automated notification footer', () => {
-		const html = buildNotificationEmail('Mega Millions', 1000, 1700, 1500, 'Fri, Dec 26, 2025');
-
-		expect(html).toContain('automated notification');
-		expect(html).toContain('LottoCheck');
-	});
-
-	it('includes CSS styling for email formatting', () => {
-		const html = buildNotificationEmail('Mega Millions', 1000, 1700, 1500, 'Fri, Dec 26, 2025');
-
-		expect(html).toContain('<style>');
-		expect(html).toContain('font-family');
-		expect(html).toContain('.container');
-	});
-
-	it('includes jackpot alert emoji/icon', () => {
-		const html = buildNotificationEmail('Powerball', 1000, 1700, 1500, 'Sat, Dec 27, 2025');
-
-		expect(html).toContain('🎰');
-		expect(html).toContain('Lottery Jackpot Alert');
-	});
-});
-
-describe('buildNotificationText', () => {
+describe('buildNotificationMessage', () => {
 	it('includes all notification details as plain text', () => {
-		const text = buildNotificationText('Mega Millions', 1000, 1700, 1500, 'Fri, Dec 26, 2025');
+		const text = buildNotificationMessage('Mega Millions', 1000, 1700, 1500, 'Fri, Dec 26, 2025');
 
 		expect(text).toContain('Mega Millions has crossed your threshold!');
 		expect(text).toContain('Previous: $1.00 Billion');
@@ -1137,154 +1047,102 @@ describe('buildNotificationText', () => {
 		expect(text).toContain('Next drawing: Fri, Dec 26, 2025');
 	});
 
+	it('formats amounts in millions correctly', () => {
+		const text = buildNotificationMessage('Mega Millions', 450, 650, 500, 'Fri, Dec 26, 2025');
+
+		expect(text).toContain('$450 Million');
+		expect(text).toContain('$650 Million');
+		expect(text).toContain('$500 Million');
+	});
+
+	it('formats amounts in billions correctly', () => {
+		const text = buildNotificationMessage('Powerball', 1500, 2000, 1800, 'Sat, Dec 27, 2025');
+
+		expect(text).toContain('$1.50 Billion');
+		expect(text).toContain('$2.00 Billion');
+		expect(text).toContain('$1.80 Billion');
+	});
+
 	it('contains no HTML markup', () => {
-		const text = buildNotificationText('Powerball', 450, 650, 500, 'Sat, Dec 27, 2025');
+		const text = buildNotificationMessage('Powerball', 450, 650, 500, 'Sat, Dec 27, 2025');
 
 		expect(text).not.toContain('<');
 		expect(text).not.toContain('>');
 	});
 });
 
-describe('sendEmail', () => {
-	it('sends via the email binding and reports success', async () => {
-		const email = createMockEmail();
+describe('sendNtfyNotification', () => {
+	it('publishes to the topic and reports success', async () => {
+		const ntfy = mockNtfy();
 
-		const result = await sendEmail(
-			email,
-			'from@example.com',
-			'to@example.com',
-			'Test Subject',
-			'<html>Test Body</html>',
-			'Test Body',
-		);
+		const result = await sendNtfyNotification('my-topic', 'Test Title', 'Test message');
 
 		expect(result.success).toBe(true);
-		expect(result.messageId).toBe('test-message-id');
 		expect(result.error).toBeUndefined();
-		expect(email.send).toHaveBeenCalledTimes(1);
+		expect(ntfy.requests).toHaveLength(1);
 	});
 
-	it('sends the correct message structure', async () => {
-		const email = createMockEmail();
+	it('sends the correct request structure', async () => {
+		const ntfy = mockNtfy();
 
-		await sendEmail(
-			email,
-			'sender@domain.com',
-			'recipient@domain.com',
-			'Jackpot Alert',
-			'<html>Email Content</html>',
-			'Email Content',
-		);
+		await sendNtfyNotification('my-topic', 'Jackpot Alert', 'Message body');
 
-		const message = email.send.mock.calls[0][0];
-		expect(message.to).toBe('recipient@domain.com');
-		expect(message.from).toEqual({ email: 'sender@domain.com', name: 'LottoCheck' });
-		expect(message.subject).toBe('Jackpot Alert');
-		expect(message.html).toBe('<html>Email Content</html>');
-		expect(message.text).toBe('Email Content');
+		const { url, init } = ntfy.requests[0];
+		expect(url).toBe('https://ntfy.sh/my-topic');
+		expect(init.method).toBe('POST');
+		expect(init.headers).toEqual({ Title: 'Jackpot Alert', Priority: 'high', Tags: 'slot_machine' });
+		expect(init.body).toBe('Message body');
 	});
 
-	it('returns error details when the binding rejects with a coded error', async () => {
-		const error = new Error('Sender domain not onboarded');
-		error.code = 'E_SENDER_NOT_VERIFIED';
-		const email = createMockEmail(vi.fn().mockRejectedValue(error));
+	it('URL-encodes the topic name', async () => {
+		const ntfy = mockNtfy();
 
-		const result = await sendEmail(email, 'from@example.com', 'to@example.com', 'Test', '<html>Test</html>', 'Test');
+		await sendNtfyNotification('topic/with spaces', 'Title', 'Message');
+
+		expect(ntfy.requests[0].url).toBe('https://ntfy.sh/topic%2Fwith%20spaces');
+	});
+
+	it('returns error details when ntfy responds with an error status', async () => {
+		mockNtfy(500);
+
+		const result = await sendNtfyNotification('my-topic', 'Title', 'Message');
 
 		expect(result.success).toBe(false);
-		expect(result.error).toContain('E_SENDER_NOT_VERIFIED');
-		expect(result.error).toContain('Sender domain not onboarded');
+		expect(result.error).toContain('ntfy send failed');
+		expect(result.error).toContain('500');
 	});
 
-	it('handles the binding rejecting with a plain error', async () => {
-		const email = createMockEmail(vi.fn().mockRejectedValue(new Error('Network timeout')));
+	it('handles fetch rejecting', async () => {
+		fetchHandlers.set('https://ntfy.sh', () => {
+			throw new Error('Network timeout');
+		});
 
-		const result = await sendEmail(email, 'from@example.com', 'to@example.com', 'Test', '<html>Test</html>', 'Test');
+		const result = await sendNtfyNotification('my-topic', 'Title', 'Message');
 
 		expect(result.success).toBe(false);
-		expect(result.error).toContain('Email send failed');
+		expect(result.error).toContain('ntfy send failed');
 		expect(result.error).toContain('Network timeout');
-	});
-
-	it('handles the binding rejecting with non-Error values', async () => {
-		const email = createMockEmail(vi.fn().mockRejectedValue('String error'));
-
-		const result = await sendEmail(email, 'from@example.com', 'to@example.com', 'Test', '<html>Test</html>', 'Test');
-
-		expect(result.success).toBe(false);
-		expect(result.error).toBeDefined();
 	});
 });
 
-describe('isEmailConfigured', () => {
-	const emailBinding = { send: () => {} };
-
-	it('returns true when the binding and both addresses are set', () => {
-		expect(
-			isEmailConfigured({
-				EMAIL: emailBinding,
-				FROM_EMAIL: 'from@example.com',
-				TO_EMAIL: 'to@example.com',
-			}),
-		).toBe(true);
+describe('isNtfyConfigured', () => {
+	it('returns true when NTFY_TOPIC is set', () => {
+		expect(isNtfyConfigured({ NTFY_TOPIC: 'my-topic' })).toBe(true);
 	});
 
-	it('returns false when the EMAIL binding is missing', () => {
-		expect(
-			isEmailConfigured({
-				FROM_EMAIL: 'from@example.com',
-				TO_EMAIL: 'to@example.com',
-			}),
-		).toBe(false);
+	it('returns false when NTFY_TOPIC is missing', () => {
+		expect(isNtfyConfigured({})).toBe(false);
 	});
 
-	it('returns false when FROM_EMAIL is missing', () => {
-		expect(
-			isEmailConfigured({
-				EMAIL: emailBinding,
-				TO_EMAIL: 'to@example.com',
-			}),
-		).toBe(false);
-	});
-
-	it('returns false when TO_EMAIL is missing', () => {
-		expect(
-			isEmailConfigured({
-				EMAIL: emailBinding,
-				FROM_EMAIL: 'from@example.com',
-			}),
-		).toBe(false);
-	});
-
-	it('returns false when everything is missing', () => {
-		expect(isEmailConfigured({})).toBe(false);
+	it('returns false when NTFY_TOPIC is empty string', () => {
+		expect(isNtfyConfigured({ NTFY_TOPIC: '' })).toBe(false);
 	});
 
 	it('returns false when env is undefined', () => {
-		expect(isEmailConfigured(undefined)).toBe(false);
+		expect(isNtfyConfigured(undefined)).toBe(false);
 	});
 
 	it('returns false when env is null', () => {
-		expect(isEmailConfigured(null)).toBe(false);
-	});
-
-	it('returns false when FROM_EMAIL is empty string', () => {
-		expect(
-			isEmailConfigured({
-				EMAIL: emailBinding,
-				FROM_EMAIL: '',
-				TO_EMAIL: 'to@example.com',
-			}),
-		).toBe(false);
-	});
-
-	it('returns false when TO_EMAIL is empty string', () => {
-		expect(
-			isEmailConfigured({
-				EMAIL: emailBinding,
-				FROM_EMAIL: 'from@example.com',
-				TO_EMAIL: '',
-			}),
-		).toBe(false);
+		expect(isNtfyConfigured(null)).toBe(false);
 	});
 });

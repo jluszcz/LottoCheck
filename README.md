@@ -7,12 +7,12 @@ A CloudFlare Worker that monitors Mega Millions and Powerball jackpots daily and
 - **Automated Daily Checks**: Runs automatically every day at 8pm UTC (3pm EST / 4pm EDT — a fixed UTC cron doesn't follow daylight saving)
 - **Dual Lottery Support**: Monitors both Mega Millions and Powerball
 - **Configurable Threshold**: Set your own jackpot threshold (defaults to $1.5 billion)
-- **Email Notifications**: Get notified via Cloudflare Email Service when jackpots cross your threshold
+- **Push Notifications**: Get notified via [ntfy](https://ntfy.sh) when jackpots cross your threshold
 - **Smart Threshold Crossing Detection**: Only notifies when jackpot moves from below to above threshold
 - **Persistent State**: Uses CloudFlare KV to remember previous jackpot amounts
 - **Real-time Data**: Fetches from official lottery sources
 - **HTTP API**: Test endpoint for manual checks during development
-- **Zero Cost**: Runs on CloudFlare's free tier (including email via Cloudflare Email Service)
+- **Zero Cost**: Runs on CloudFlare's free tier; ntfy.sh is free with no signup
 
 ## How It Works
 
@@ -29,13 +29,13 @@ The worker runs daily and:
    - Only triggers notifications when a jackpot crosses from below to above your threshold
    - Prevents duplicate notifications when jackpots stay above threshold
 
-4. **Sends Email Notifications** (via the Cloudflare Email Service binding) when a threshold crossing is detected, including:
+4. **Sends Push Notifications** (via [ntfy](https://ntfy.sh)) when a threshold crossing is detected, including:
    - Lottery name
    - Previous and current jackpot amounts
    - Your threshold
    - Next drawing date
 
-5. **Stores Current Jackpots** in KV for the next run. Storage is skipped for a lottery when its data fetch failed (so a transient error can't trigger a duplicate alert later), when reading its previous state from KV failed (an unknown previous amount must not be treated as a fresh crossing), or when its notification email failed to send (so the crossing is retried on the next run)
+5. **Stores Current Jackpots** in KV for the next run. Storage is skipped for a lottery when its data fetch failed (so a transient error can't trigger a duplicate alert later), when reading its previous state from KV failed (an unknown previous amount must not be treated as a fresh crossing), or when its notification failed to send (so the crossing is retried on the next run)
 
 6. **Logs Results** to CloudFlare's dashboard for monitoring
 
@@ -137,8 +137,8 @@ Tests are organized by feature area:
 - **Scheduled handler**: Cron trigger and logging behavior
 - **KV Storage**: Previous jackpot retrieval and storage
 - **Threshold Crossing Detection**: Below→above crossing logic
-- **Email Notifications**: Email Service binding integration and HTML/text formatting
-- **Integration**: End-to-end scheduled handler with KV and email
+- **Notifications**: ntfy publishing and plain-text message formatting
+- **Integration**: End-to-end scheduled handler with KV and notifications
 - **Threshold checking**: Jackpot comparison logic and edge cases
 - **Mega Millions API**: API response parsing and error handling
 - **Powerball scraping**: HTML parsing with multiple patterns
@@ -161,12 +161,12 @@ mockMegaMillions(megaMillionsBody(1700000000));
 mockPowerball(powerballHtml('$1.50 Billion'));
 mockMegaMillions('Server error', 500);
 
-// Mock bindings for scheduled-handler tests
+// Mock ntfy publishes (returns recorded requests) and bindings for
+// scheduled-handler tests
+const ntfy = mockNtfy();
 const mockEnv = createMockEnv({
 	LOTTERY_STATE: createMockKV({ 'Mega Millions': { jackpotAmount: 1000 } }),
-	EMAIL: createMockEmail(),
-	FROM_EMAIL: 'from@test.com',
-	TO_EMAIL: 'to@test.com',
+	NTFY_TOPIC: 'test-topic',
 });
 ```
 
@@ -245,24 +245,21 @@ Adjust this value to set your preferred notification threshold:
 
 The threshold is validated on startup and falls back to the default if invalid.
 
-### Email Notifications
+### Push Notifications (ntfy)
 
-Email notifications are sent via [Cloudflare Email Service](https://developers.cloudflare.com/email-service/) when a jackpot crosses your threshold. The worker uses a `send_email` binding (named `EMAIL` in `wrangler.toml`), so no API keys are required.
+Notifications are sent as push messages via [ntfy](https://ntfy.sh) when a jackpot crosses your threshold. ntfy.sh is free, requires no account or API key, and delivers to the open-source [Android](https://play.google.com/store/apps/details?id=io.heckel.ntfy) and [iOS](https://apps.apple.com/us/app/ntfy/id1625396347) apps.
 
-**One-time account setup**:
+**One-time setup**:
 
-1. Onboard a domain you own to Email Sending (Cloudflare Dashboard → Email, or `npx wrangler email sending enable yourdomain.com` on recent wrangler versions)
-2. `FROM_EMAIL` must be an address on that domain; `TO_EMAIL` can be any address you control
+1. Pick a topic name. Anyone who knows the topic can read and publish to it, so treat it like a password — use something long and unguessable (e.g., `lottocheck-x7Kp2mQv9`)
+2. Install the ntfy app on your phone and subscribe to that topic
 
-**Production Setup** (recommended - keeps emails private):
+**Production Setup** (keeps the topic private):
 
 ```bash
-# Set secrets that won't be committed to git
-wrangler secret put FROM_EMAIL
-# Enter: alerts@yourdomain.com (domain must be onboarded to Email Sending)
-
-wrangler secret put TO_EMAIL
-# Enter: your-email@example.com
+# Set a secret that won't be committed to git
+wrangler secret put NTFY_TOPIC
+# Enter: your unguessable topic name
 
 # Deploy
 npm run deploy
@@ -274,14 +271,14 @@ npm run deploy
 # Copy the example file
 cp .dev.vars.example .dev.vars
 
-# Edit .dev.vars with your actual email addresses
+# Edit .dev.vars with your actual topic name
 # This file is in .gitignore and won't be committed
 
 # Run locally
 npm run dev
 ```
 
-**Note**: If the binding or these variables are not set, the worker will skip email sending and only log results.
+**Note**: If `NTFY_TOPIC` is not set, the worker will skip notifications and only log results.
 
 ### KV Storage
 
@@ -332,8 +329,8 @@ The **scheduled handler** integrates all components, processing each lottery thr
 1. Fetches current jackpots using `checkMegaMillions()` and `checkPowerball()`
 2. Retrieves previous jackpots from KV using `getPreviousJackpot()`
 3. Detects threshold crossings using `detectThresholdCrossing()`
-4. Sends email notifications via `sendEmail()` (Cloudflare Email Service binding)
-5. Stores current jackpots using `storePreviousJackpot()` — skipped when the fetch, the KV read, or the notification email failed, so errors never overwrite good state and missed notifications retry on the next run
+4. Sends push notifications via `sendNtfyNotification()` (HTTP POST to ntfy.sh)
+5. Stores current jackpots using `storePreviousJackpot()` — skipped when the fetch, the KV read, or the notification failed, so errors never overwrite good state and missed notifications retry on the next run
 
 Data fetching functions:
 
