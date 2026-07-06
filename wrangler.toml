@@ -19,7 +19,7 @@ id = "7bd735f4c3664b5888f38d41ebd72ada"
 
 [triggers]
 # Runs daily at 8pm UTC (3pm EST / 4pm EDT)
-crons = ["0 12 * * *"]
+crons = ["0 13 * * *"]
 
 [observability]
 # Enable Workers Logs (invocation logs + console output) in the CloudFlare dashboard.
