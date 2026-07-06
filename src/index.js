@@ -15,7 +15,7 @@ const BILLION_IN_MILLIONS = 1000;
  * @returns {number} Threshold amount in millions
  */
 export function getThreshold(env) {
-	const parsed = parseFloat(env?.JACKPOT_THRESHOLD);
+	const parsed = parseFloat(env?.JACKPOT_THRESHOLD_MILLIONS);
 	return !isNaN(parsed) && parsed > 0 ? parsed : DEFAULT_THRESHOLD_MILLIONS;
 }
 

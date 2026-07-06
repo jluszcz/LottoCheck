@@ -160,7 +160,7 @@ function mockNtfy(status = 200, body = '{}') {
  */
 function createMockEnv(overrides = {}) {
 	return {
-		JACKPOT_THRESHOLD: '1500',
+		JACKPOT_THRESHOLD_MILLIONS: '1500',
 		LOTTERY_STATE: createMockKV(),
 		...overrides,
 	};
@@ -595,7 +595,7 @@ describe('Threshold checking', () => {
 
 		const request = new Request('http://localhost');
 		const ctx = createExecutionContext();
-		const response = await worker.fetch(request, { JACKPOT_THRESHOLD: '1500' }, ctx);
+		const response = await worker.fetch(request, { JACKPOT_THRESHOLD_MILLIONS: '1500' }, ctx);
 		const data = await response.json();
 
 		expect(data.megaMillions.exceedsThreshold).toBe(true);
@@ -613,7 +613,7 @@ describe('Threshold checking', () => {
 
 		const request = new Request('http://localhost');
 		const ctx = createExecutionContext();
-		const response = await worker.fetch(request, { JACKPOT_THRESHOLD: '1500' }, ctx);
+		const response = await worker.fetch(request, { JACKPOT_THRESHOLD_MILLIONS: '1500' }, ctx);
 		const data = await response.json();
 
 		expect(data.megaMillions.exceedsThreshold).toBe(false);
@@ -630,7 +630,7 @@ describe('Threshold checking', () => {
 
 		const request = new Request('http://localhost');
 		const ctx = createExecutionContext();
-		const response = await worker.fetch(request, { JACKPOT_THRESHOLD: 'invalid' }, ctx);
+		const response = await worker.fetch(request, { JACKPOT_THRESHOLD_MILLIONS: 'invalid' }, ctx);
 		const data = await response.json();
 
 		// Default threshold is 1500, so 1600M should exceed it
@@ -646,7 +646,7 @@ describe('Threshold checking', () => {
 
 		const request = new Request('http://localhost');
 		const ctx = createExecutionContext();
-		const response = await worker.fetch(request, { JACKPOT_THRESHOLD: '1500' }, ctx);
+		const response = await worker.fetch(request, { JACKPOT_THRESHOLD_MILLIONS: '1500' }, ctx);
 		const data = await response.json();
 
 		expect(data.threshold.display).toBe('$1.50 Billion');
@@ -660,7 +660,7 @@ describe('Threshold checking', () => {
 
 		const request = new Request('http://localhost');
 		const ctx = createExecutionContext();
-		const response = await worker.fetch(request, { JACKPOT_THRESHOLD: '500' }, ctx);
+		const response = await worker.fetch(request, { JACKPOT_THRESHOLD_MILLIONS: '500' }, ctx);
 		const data = await response.json();
 
 		expect(data.threshold.display).toBe('$500 Million');
@@ -672,7 +672,7 @@ describe('Threshold checking', () => {
 
 		const request = new Request('http://localhost');
 		const ctx = createExecutionContext();
-		const response = await worker.fetch(request, { JACKPOT_THRESHOLD: '1500' }, ctx);
+		const response = await worker.fetch(request, { JACKPOT_THRESHOLD_MILLIONS: '1500' }, ctx);
 		const data = await response.json();
 
 		expect(data.megaMillions.exceedsThreshold).toBe(true);
@@ -687,7 +687,7 @@ describe('Threshold checking', () => {
 
 		const request = new Request('http://localhost');
 		const ctx = createExecutionContext();
-		const response = await worker.fetch(request, { JACKPOT_THRESHOLD: '0' }, ctx);
+		const response = await worker.fetch(request, { JACKPOT_THRESHOLD_MILLIONS: '0' }, ctx);
 		const data = await response.json();
 
 		// Neither should exceed threshold when there are errors
@@ -700,7 +700,7 @@ describe('Threshold checking', () => {
 
 describe('getThreshold', () => {
 	it('returns threshold from env when valid', () => {
-		expect(getThreshold({ JACKPOT_THRESHOLD: '2000' })).toBe(2000);
+		expect(getThreshold({ JACKPOT_THRESHOLD_MILLIONS: '2000' })).toBe(2000);
 	});
 
 	it('returns default threshold when env is undefined', () => {
@@ -711,28 +711,28 @@ describe('getThreshold', () => {
 		expect(getThreshold({})).toBe(1500);
 	});
 
-	it('returns default threshold when JACKPOT_THRESHOLD is missing', () => {
+	it('returns default threshold when JACKPOT_THRESHOLD_MILLIONS is missing', () => {
 		expect(getThreshold({ OTHER_VAR: 'value' })).toBe(1500);
 	});
 
-	it('returns default threshold when JACKPOT_THRESHOLD is not a number', () => {
-		expect(getThreshold({ JACKPOT_THRESHOLD: 'invalid' })).toBe(1500);
+	it('returns default threshold when JACKPOT_THRESHOLD_MILLIONS is not a number', () => {
+		expect(getThreshold({ JACKPOT_THRESHOLD_MILLIONS: 'invalid' })).toBe(1500);
 	});
 
-	it('returns default threshold when JACKPOT_THRESHOLD is empty string', () => {
-		expect(getThreshold({ JACKPOT_THRESHOLD: '' })).toBe(1500);
+	it('returns default threshold when JACKPOT_THRESHOLD_MILLIONS is empty string', () => {
+		expect(getThreshold({ JACKPOT_THRESHOLD_MILLIONS: '' })).toBe(1500);
 	});
 
-	it('returns default threshold when JACKPOT_THRESHOLD is zero', () => {
-		expect(getThreshold({ JACKPOT_THRESHOLD: '0' })).toBe(1500);
+	it('returns default threshold when JACKPOT_THRESHOLD_MILLIONS is zero', () => {
+		expect(getThreshold({ JACKPOT_THRESHOLD_MILLIONS: '0' })).toBe(1500);
 	});
 
-	it('returns default threshold when JACKPOT_THRESHOLD is negative', () => {
-		expect(getThreshold({ JACKPOT_THRESHOLD: '-500' })).toBe(1500);
+	it('returns default threshold when JACKPOT_THRESHOLD_MILLIONS is negative', () => {
+		expect(getThreshold({ JACKPOT_THRESHOLD_MILLIONS: '-500' })).toBe(1500);
 	});
 
 	it('handles float values correctly', () => {
-		expect(getThreshold({ JACKPOT_THRESHOLD: '1750.5' })).toBe(1750.5);
+		expect(getThreshold({ JACKPOT_THRESHOLD_MILLIONS: '1750.5' })).toBe(1750.5);
 	});
 });
 

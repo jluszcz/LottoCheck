@@ -234,7 +234,7 @@ The threshold is configured in `wrangler.toml`:
 
 ```toml
 [vars]
-JACKPOT_THRESHOLD = "1500"  # in millions ($1.5 billion)
+JACKPOT_THRESHOLD_MILLIONS = "1500"  # $1.5 billion
 ```
 
 Adjust this value to set your preferred notification threshold:

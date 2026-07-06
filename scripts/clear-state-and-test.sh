@@ -10,7 +10,7 @@
 # account's workers.dev domain is behind Cloudflare Access, which blocks
 # `wrangler dev --remote --test-scheduled` in non-interactive shells. So this
 # script deploys a temporary config whose cron fires ~3 minutes from now (with
-# JACKPOT_THRESHOLD optionally overridden), waits for Cloudflare to run it for
+# JACKPOT_THRESHOLD_MILLIONS optionally overridden), waits for Cloudflare to run it for
 # real, captures the output via `wrangler tail`, then restores the original
 # configuration with a normal deploy.
 #
@@ -61,7 +61,7 @@ CRON="$((10#$MIN)) $((10#$HR)) * * *"
 TMP_CONFIG=".wrangler.clear-state-and-test.$$.toml"
 SED_ARGS=(-E -e "s|^crons = .*|crons = [\"${CRON}\"]|")
 if [ -n "$THRESHOLD_OVERRIDE" ]; then
-	SED_ARGS+=(-e "s|^JACKPOT_THRESHOLD = .*|JACKPOT_THRESHOLD = \"${THRESHOLD_OVERRIDE}\"|")
+	SED_ARGS+=(-e "s|^JACKPOT_THRESHOLD_MILLIONS = .*|JACKPOT_THRESHOLD_MILLIONS = \"${THRESHOLD_OVERRIDE}\"|")
 fi
 sed "${SED_ARGS[@]}" wrangler.toml >"$TMP_CONFIG"
 
