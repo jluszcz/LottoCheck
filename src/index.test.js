@@ -21,10 +21,8 @@ import worker, {
  */
 
 let fetchHandlers;
-let originalConsoleLog;
 
 beforeEach(() => {
-	originalConsoleLog = console.log;
 	fetchHandlers = new Map();
 	vi.stubGlobal(
 		'fetch',
@@ -40,7 +38,7 @@ beforeEach(() => {
 });
 
 afterEach(() => {
-	console.log = originalConsoleLog;
+	vi.restoreAllMocks();
 	vi.unstubAllGlobals();
 });
 
@@ -241,7 +239,7 @@ describe('LottoCheck Worker', () => {
 	describe('scheduled handler', () => {
 		it('logs jackpot data on scheduled trigger', async () => {
 			const consoleLogs = [];
-			console.log = vi.fn((...args) => {
+			vi.spyOn(console, 'log').mockImplementation((...args) => {
 				consoleLogs.push(args.join(' '));
 			});
 
@@ -260,7 +258,7 @@ describe('LottoCheck Worker', () => {
 
 		it('logs alert when threshold is exceeded', async () => {
 			const consoleLogs = [];
-			console.log = vi.fn((...args) => {
+			vi.spyOn(console, 'log').mockImplementation((...args) => {
 				consoleLogs.push(args.join(' '));
 			});
 
@@ -281,7 +279,7 @@ describe('LottoCheck Worker', () => {
 
 		it('logs threshold crossing', async () => {
 			const consoleLogs = [];
-			console.log = vi.fn((...args) => {
+			vi.spyOn(console, 'log').mockImplementation((...args) => {
 				consoleLogs.push(args.join(' '));
 			});
 
@@ -372,6 +370,83 @@ describe('LottoCheck Worker', () => {
 			await waitOnExecutionContext(ctx);
 
 			expect(ntfy.requests).toHaveLength(0);
+		});
+
+		it('logs why no notification was sent when already above threshold', async () => {
+			const consoleLogs = [];
+			vi.spyOn(console, 'log').mockImplementation((...args) => {
+				consoleLogs.push(args.join(' '));
+			});
+
+			mockLotteries({ megaMillionsJackpot: fixtures.megaMillions.twoBillion.amount });
+
+			const mockEnv = createMockEnv({
+				LOTTERY_STATE: createMockKV({
+					'Mega Millions': { jackpotAmount: 1700, lastChecked: '2025-01-01' },
+				}),
+				NTFY_TOPIC: 'test-topic',
+			});
+
+			const controller = createScheduledController();
+			const ctx = createExecutionContext();
+
+			await worker.scheduled(controller, mockEnv, ctx);
+			await waitOnExecutionContext(ctx);
+
+			expect(
+				consoleLogs.some(
+					(log) => log.includes('Mega Millions: no notification') && log.includes('already above threshold'),
+				),
+			).toBe(true);
+		});
+
+		it('warns when a crossing occurs but NTFY_TOPIC is not configured', async () => {
+			const consoleWarnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+
+			mockMegaMillions(megaMillionsBody(fixtures.megaMillions.twoBillion.amount));
+			mockPowerball(powerballHtml(fixtures.powerball.halfBillion));
+
+			const mockEnv = createMockEnv({
+				LOTTERY_STATE: createMockKV({
+					'Mega Millions': { jackpotAmount: 1000, lastChecked: '2025-01-01' },
+				}),
+			});
+
+			const controller = createScheduledController();
+			const ctx = createExecutionContext();
+
+			await worker.scheduled(controller, mockEnv, ctx);
+			await waitOnExecutionContext(ctx);
+
+			expect(consoleWarnSpy).toHaveBeenCalledWith(expect.stringContaining('NTFY_TOPIC is not configured'));
+		});
+
+		it('logs why no notification was sent when still below threshold', async () => {
+			const consoleLogs = [];
+			vi.spyOn(console, 'log').mockImplementation((...args) => {
+				consoleLogs.push(args.join(' '));
+			});
+
+			mockLotteries({ megaMillionsJackpot: fixtures.megaMillions.halfBillion.amount });
+
+			const mockEnv = createMockEnv({
+				LOTTERY_STATE: createMockKV({
+					'Mega Millions': { jackpotAmount: 400, lastChecked: '2025-01-01' },
+				}),
+				NTFY_TOPIC: 'test-topic',
+			});
+
+			const controller = createScheduledController();
+			const ctx = createExecutionContext();
+
+			await worker.scheduled(controller, mockEnv, ctx);
+			await waitOnExecutionContext(ctx);
+
+			expect(
+				consoleLogs.some(
+					(log) => log.includes('Mega Millions: no notification') && log.includes('still below threshold'),
+				),
+			).toBe(true);
 		});
 
 		it('handles KV namespace being undefined', async () => {
