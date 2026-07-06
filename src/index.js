@@ -118,109 +118,70 @@ export function detectThresholdCrossing(previousAmount, currentAmount, threshold
 }
 
 /**
- * Build email HTML for threshold crossing notification
+ * Build the plain-text body for a threshold crossing notification
  * @param {string} lotteryName - Name of lottery
  * @param {number} previousAmount - Previous amount in millions
  * @param {number} currentAmount - Current amount in millions
  * @param {number} threshold - Threshold in millions
  * @param {string} nextDrawing - Next drawing date string
- * @returns {string} HTML email body
+ * @returns {string} Plain-text notification body
  */
-export function buildNotificationEmail(lotteryName, previousAmount, currentAmount, threshold, nextDrawing) {
-	const previousDisplay = formatJackpotDisplay(previousAmount);
-	const currentDisplay = formatJackpotDisplay(currentAmount);
-	const thresholdDisplay = formatJackpotDisplay(threshold);
-
-	return `
-<!DOCTYPE html>
-<html>
-<head>
-	<meta charset="UTF-8">
-	<style>
-		body { font-family: Arial, sans-serif; line-height: 1.6; color: #333; }
-		.container { max-width: 600px; margin: 0 auto; padding: 20px; }
-		h2 { color: #2c3e50; }
-		ul { background: #f4f4f4; padding: 20px; border-radius: 5px; }
-		li { margin: 10px 0; }
-		.footer { margin-top: 20px; font-size: 0.9em; color: #666; }
-	</style>
-</head>
-<body>
-	<div class="container">
-		<h2>🎰 Lottery Jackpot Alert!</h2>
-		<p><strong>${lotteryName}</strong> has crossed your threshold!</p>
-		<ul>
-			<li><strong>Previous:</strong> ${previousDisplay}</li>
-			<li><strong>Current:</strong> ${currentDisplay}</li>
-			<li><strong>Your threshold:</strong> ${thresholdDisplay}</li>
-			<li><strong>Next drawing:</strong> ${nextDrawing}</li>
-		</ul>
-		<p class="footer">This is an automated notification from LottoCheck.</p>
-	</div>
-</body>
-</html>
-`.trim();
-}
-
-/**
- * Build plain-text alternative for the notification email
- * @param {string} lotteryName - Name of lottery
- * @param {number} previousAmount - Previous amount in millions
- * @param {number} currentAmount - Current amount in millions
- * @param {number} threshold - Threshold in millions
- * @param {string} nextDrawing - Next drawing date string
- * @returns {string} Plain-text email body
- */
-export function buildNotificationText(lotteryName, previousAmount, currentAmount, threshold, nextDrawing) {
+export function buildNotificationMessage(lotteryName, previousAmount, currentAmount, threshold, nextDrawing) {
 	return [
-		'Lottery Jackpot Alert!',
-		'',
 		`${lotteryName} has crossed your threshold!`,
 		'',
 		`Previous: ${formatJackpotDisplay(previousAmount)}`,
 		`Current: ${formatJackpotDisplay(currentAmount)}`,
 		`Your threshold: ${formatJackpotDisplay(threshold)}`,
 		`Next drawing: ${nextDrawing}`,
-		'',
-		'This is an automated notification from LottoCheck.',
 	].join('\n');
 }
 
 /**
- * Check if email configuration is valid
+ * Check if ntfy notification configuration is valid
  * @param {Object} env - Environment object
- * @returns {boolean} True if the EMAIL binding, FROM_EMAIL, and TO_EMAIL are all configured
+ * @returns {boolean} True if NTFY_TOPIC is configured
  */
-export function isEmailConfigured(env) {
-	return !!(env?.EMAIL && env?.FROM_EMAIL && env?.TO_EMAIL);
+export function isNtfyConfigured(env) {
+	return !!env?.NTFY_TOPIC;
 }
 
 /**
- * Send email notification via the Cloudflare Email Service binding
- * @param {SendEmail} emailBinding - The send_email binding (env.EMAIL)
- * @param {string} fromEmail - Sender email (env.FROM_EMAIL, must be on a domain onboarded to Email Sending)
- * @param {string} toEmail - Recipient email (env.TO_EMAIL)
- * @param {string} subject - Email subject
- * @param {string} htmlBody - HTML email body
- * @param {string} textBody - Plain-text email body
- * @returns {Promise<{success: boolean, messageId?: string, error?: string}>} Send result
+ * Send a push notification via ntfy.sh
+ * @param {string} topic - The ntfy topic to publish to (env.NTFY_TOPIC; the topic
+ *   name acts as the credential, so keep it secret and unguessable)
+ * @param {string} title - Notification title (ASCII only — HTTP header values
+ *   cannot carry emoji; the Tags header adds the 🎰 icon instead)
+ * @param {string} message - Notification body
+ * @returns {Promise<{success: boolean, error?: string}>} Send result
  */
-export async function sendEmail(emailBinding, fromEmail, toEmail, subject, htmlBody, textBody) {
+export async function sendNtfyNotification(topic, title, message) {
 	try {
-		const result = await emailBinding.send({
-			to: toEmail,
-			from: { email: fromEmail, name: 'LottoCheck' },
-			subject,
-			html: htmlBody,
-			text: textBody,
+		const response = await fetch(`https://ntfy.sh/${encodeURIComponent(topic)}`, {
+			method: 'POST',
+			headers: {
+				Title: title,
+				Priority: 'high',
+				Tags: 'slot_machine',
+			},
+			body: message,
 		});
 
-		return { success: true, messageId: result?.messageId };
+		// The body must be consumed, or the Workers runtime can't release the connection for reuse
+		const responseBody = await response.text();
+
+		if (!response.ok) {
+			return {
+				success: false,
+				error: `ntfy send failed: ${response.status} ${response.statusText}${responseBody ? ` - ${responseBody}` : ''}`,
+			};
+		}
+
+		return { success: true };
 	} catch (error) {
-		const code = error.code ? `${error.code}: ` : '';
 		return {
 			success: false,
-			error: `Email send failed: ${code}${error.message || error}`,
+			error: `ntfy send failed: ${error.message || error}`,
 		};
 	}
 }
@@ -264,7 +225,7 @@ export async function sendEmail(emailBinding, fromEmail, toEmail, subject, htmlB
  * The KV update is skipped when the fetch failed (keeps the last good amount so a
  * transient error can't trigger a duplicate alert later), when the KV read failed
  * (an unknown previous amount must not be treated as 0), and when a notification
- * email failed to send (so the crossing is retried on the next run).
+ * failed to send (so the crossing is retried on the next run).
  * @param {object} env - Environment variables
  * @param {LotteryResult} current - Current lottery result
  * @param {number} thresholdMillions - Threshold in millions
@@ -287,35 +248,24 @@ async function processLottery(env, current, thresholdMillions) {
 	if (crossing.crossed) {
 		console.log(`THRESHOLD CROSSED: ${current.lottery} went from ${previousAmount}M to ${current.jackpotAmount}M`);
 
-		if (isEmailConfigured(env)) {
-			const html = buildNotificationEmail(
+		if (isNtfyConfigured(env)) {
+			const message = buildNotificationMessage(
 				current.lottery,
 				previousAmount,
 				current.jackpotAmount,
 				thresholdMillions,
 				current.nextDrawing,
 			);
-			const text = buildNotificationText(
-				current.lottery,
-				previousAmount,
-				current.jackpotAmount,
-				thresholdMillions,
-				current.nextDrawing,
-			);
-			const result = await sendEmail(
-				env.EMAIL,
-				env.FROM_EMAIL,
-				env.TO_EMAIL,
-				`🎰 ${current.lottery} Jackpot Alert!`,
-				html,
-				text,
-			);
+			const result = await sendNtfyNotification(env.NTFY_TOPIC, `${current.lottery} Jackpot Alert!`, message);
 
 			if (!result.success) {
-				console.error(`Email failed for ${current.lottery}, keeping previous state to retry next run:`, result.error);
+				console.error(
+					`Notification failed for ${current.lottery}, keeping previous state to retry next run:`,
+					result.error,
+				);
 				return;
 			}
-			console.log(`Email sent successfully for ${current.lottery} (messageId: ${result.messageId})`);
+			console.log(`Notification sent successfully for ${current.lottery}`);
 		}
 	}
 
