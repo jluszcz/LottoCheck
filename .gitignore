@@ -9,6 +9,7 @@
 .env.local
 .idea
 .vscode/*
+.wrangler.clear-state*.toml
 .wrangler/
 Thumbs.db
 coverage/
