@@ -115,6 +115,35 @@ Scheduled trigger is defined in `wrangler.toml`:
 crons = ["0 20 * * *"]  # 8pm UTC = 3pm EST / 4pm EDT
 ```
 
+### Observability
+
+Workers Logs is enabled in `wrangler.toml` so `console.*` output and invocation logs are
+retained and queryable in the CloudFlare dashboard (Workers & Pages → lottocheck →
+Observability → Logs). `head_sampling_rate = 1` keeps 100% of logs, which is fine for this
+low-volume worker (one cron run/day plus manual fetches):
+
+```toml
+[observability]
+enabled = true
+head_sampling_rate = 1
+```
+
+Takes effect on the next `npm run deploy`. For live tailing during development use
+`npx wrangler tail`.
+
+**Debugging missing notifications**: `processLottery()` logs a line at every decision point so
+a missing notification is always explainable — including the two silent cases: (1) no crossing
+because the jackpot was _already_ above threshold last run (logged with previous/current/threshold
+amounts), and (2) a real crossing that can't be sent because `NTFY_TOPIC` is unset (logged as a
+`console.warn`). Each successful KV write also logs the stored amount that becomes the next run's
+"previous" value.
+
+Note that the unset-`NTFY_TOPIC` case still stores the current amount as state, so once the topic
+is configured the crossing that was missed while unconfigured will _not_ re-fire — the next run
+sees "previous" already above threshold (no upward crossing). This is consistent with the
+notify-only-on-upward-crossing design; if you want the first alert after setting the secret, clear
+the lottery's KV entry so the next run sees a fresh below→above transition.
+
 ## Secrets Hygiene
 
 **Never check the real ntfy topic (or any real email address) into source control.** The ntfy topic name is the credential — anyone who knows it can read and publish notifications. Real values live only in:

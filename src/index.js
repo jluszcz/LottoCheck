@@ -84,6 +84,7 @@ export async function storePreviousJackpot(kv, lotteryName, jackpotAmount) {
 		};
 
 		await kv.put(lotteryName, JSON.stringify(data));
+		console.log(`Stored ${lotteryName} state: ${jackpotAmount}M (this becomes the "previous" amount next run)`);
 	} catch (error) {
 		// Log error but don't throw - storage failure shouldn't crash the worker
 		console.error(`Error storing jackpot for ${lotteryName}:`, error.message);
@@ -245,28 +246,49 @@ async function processLottery(env, current, thresholdMillions) {
 
 	const crossing = detectThresholdCrossing(previousAmount, current.jackpotAmount, thresholdMillions);
 
-	if (crossing.crossed) {
-		console.log(`THRESHOLD CROSSED: ${current.lottery} went from ${previousAmount}M to ${current.jackpotAmount}M`);
+	if (!crossing.crossed) {
+		// Log the decision so a missing notification is explainable. The two
+		// common reasons: current is still below threshold, or it was already
+		// above last run (no upward crossing — this is the usual "why didn't I
+		// get an alert?" case when the jackpot is clearly high).
+		const reason =
+			current.jackpotAmount < thresholdMillions
+				? 'still below threshold'
+				: 'already above threshold on the previous run (no upward crossing)';
+		console.log(
+			`${current.lottery}: no notification — ${reason} (previous ${previousAmount}M, current ${current.jackpotAmount}M, threshold ${thresholdMillions}M)`,
+		);
+		await storePreviousJackpot(env.LOTTERY_STATE, current.lottery, current.jackpotAmount);
+		return;
+	}
 
-		if (isNtfyConfigured(env)) {
-			const message = buildNotificationMessage(
-				current.lottery,
-				previousAmount,
-				current.jackpotAmount,
-				thresholdMillions,
-				current.nextDrawing,
+	console.log(`THRESHOLD CROSSED: ${current.lottery} went from ${previousAmount}M to ${current.jackpotAmount}M`);
+
+	if (isNtfyConfigured(env)) {
+		const message = buildNotificationMessage(
+			current.lottery,
+			previousAmount,
+			current.jackpotAmount,
+			thresholdMillions,
+			current.nextDrawing,
+		);
+		const result = await sendNtfyNotification(env.NTFY_TOPIC, `${current.lottery} Jackpot Alert!`, message);
+
+		if (!result.success) {
+			console.error(
+				`Notification failed for ${current.lottery}, keeping previous state to retry next run:`,
+				result.error,
 			);
-			const result = await sendNtfyNotification(env.NTFY_TOPIC, `${current.lottery} Jackpot Alert!`, message);
-
-			if (!result.success) {
-				console.error(
-					`Notification failed for ${current.lottery}, keeping previous state to retry next run:`,
-					result.error,
-				);
-				return;
-			}
-			console.log(`Notification sent successfully for ${current.lottery}`);
+			return;
 		}
+		console.log(`Notification sent successfully for ${current.lottery}`);
+	} else {
+		// A crossing happened but there's nowhere to send it. Warn loudly — this
+		// is a silent misconfiguration that otherwise looks identical to "no
+		// crossing" from the outside.
+		console.warn(
+			`${current.lottery}: threshold crossed but NTFY_TOPIC is not configured — no notification sent. Set it with: wrangler secret put NTFY_TOPIC`,
+		);
 	}
 
 	await storePreviousJackpot(env.LOTTERY_STATE, current.lottery, current.jackpotAmount);
