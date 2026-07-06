@@ -106,6 +106,25 @@ Both functions normalize amounts to millions for threshold comparisons and handl
 2. Visit `http://localhost:8787` to see current jackpots
 3. Scheduled triggers don't auto-run locally - use HTTP endpoint for testing
 
+## Testing the Deployed Scheduled Handler
+
+```bash
+scripts/clear-state-and-test.sh        # use the configured threshold
+scripts/clear-state-and-test.sh 100    # override threshold to $100M for this run
+```
+
+Clears both lotteries' production KV state, then triggers a genuine run of the deployed
+scheduled handler: Cloudflare has no API to fire a cron manually (and the workers.dev domain is
+behind Cloudflare Access, which blocks `wrangler dev --remote --test-scheduled` in
+non-interactive shells), so the script deploys a temporary config whose cron fires ~3 minutes
+out — with `JACKPOT_THRESHOLD` optionally overridden — captures the run via `wrangler tail`,
+prints the decision log, and restores the original configuration with a normal deploy.
+
+Because the state is cleared first, any jackpot above the (possibly overridden) threshold
+registers as a fresh below→above crossing and sends a **real ntfy notification**. Both deploys
+ship the current working tree; if the script is killed hard between them, run `npm run deploy`
+to restore the real cron and threshold.
+
 ## CloudFlare Configuration
 
 Scheduled trigger is defined in `wrangler.toml`:

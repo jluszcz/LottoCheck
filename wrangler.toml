@@ -4,8 +4,8 @@ compatibility_date = "2026-03-17"
 compatibility_flags = ["nodejs_compat"]
 
 [vars]
-# Jackpot threshold in millions (1500 = $1.5 billion)
-JACKPOT_THRESHOLD = "300"
+# Jackpot threshold in millions (e.g. 1500 = $1.5 billion)
+JACKPOT_THRESHOLD = "1250"
 
 # ntfy topic for push notifications (https://ntfy.sh)
 # The topic name acts as the credential — never commit the real value.
@@ -19,11 +19,8 @@ id = "7bd735f4c3664b5888f38d41ebd72ada"
 
 [triggers]
 # Runs daily at 8pm UTC (3pm EST / 4pm EDT)
-crons = ["0 13 * * *"]
+crons = ["0 20 * * *"]
 
 [observability]
-# Enable Workers Logs (invocation logs + console output) in the CloudFlare dashboard.
-# head_sampling_rate = 1 keeps 100% of logs — appropriate for this low-volume worker
-# (one cron run per day plus occasional manual fetches).
 enabled = true
 head_sampling_rate = 1
