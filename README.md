@@ -280,6 +280,13 @@ npm run dev
 
 **Note**: If `NTFY_TOPIC` is not set, the worker will skip notifications and only log results.
 
+**Migrating from the email version**: If you previously deployed the email-based worker, its secrets are no longer used — delete them so no stale credentials linger:
+
+```bash
+wrangler secret delete FROM_EMAIL
+wrangler secret delete TO_EMAIL
+```
+
 ### KV Storage
 
 The worker uses CloudFlare KV to store previous jackpot amounts for threshold crossing detection.

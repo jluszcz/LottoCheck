@@ -167,10 +167,13 @@ export async function sendNtfyNotification(topic, title, message) {
 			body: message,
 		});
 
+		// The body must be consumed, or the Workers runtime can't release the connection for reuse
+		const responseBody = await response.text();
+
 		if (!response.ok) {
 			return {
 				success: false,
-				error: `ntfy send failed: ${response.status} ${response.statusText}`,
+				error: `ntfy send failed: ${response.status} ${response.statusText}${responseBody ? ` - ${responseBody}` : ''}`,
 			};
 		}
 

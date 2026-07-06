@@ -145,11 +145,11 @@ function createMockKV(initialData = {}) {
  * @param {number} [status=200] - Response status
  * @returns {{requests: Array<{url: string, init: Object}>}} Recorded requests
  */
-function mockNtfy(status = 200) {
+function mockNtfy(status = 200, body = '{}') {
 	const requests = [];
 	fetchHandlers.set('https://ntfy.sh', (url, init) => {
 		requests.push({ url, init });
-		return new Response('{}', { status });
+		return new Response(body, { status });
 	});
 	return { requests };
 }
@@ -1103,13 +1103,14 @@ describe('sendNtfyNotification', () => {
 	});
 
 	it('returns error details when ntfy responds with an error status', async () => {
-		mockNtfy(500);
+		mockNtfy(500, '{"error": "limit exceeded"}');
 
 		const result = await sendNtfyNotification('my-topic', 'Title', 'Message');
 
 		expect(result.success).toBe(false);
 		expect(result.error).toContain('ntfy send failed');
 		expect(result.error).toContain('500');
+		expect(result.error).toContain('limit exceeded');
 	});
 
 	it('handles fetch rejecting', async () => {

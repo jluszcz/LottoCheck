@@ -130,7 +130,7 @@ Any tracked file — `wrangler.toml`, `.dev.vars.example`, tests, docs, comments
 
 - Sent as an HTTP POST to `https://ntfy.sh/<NTFY_TOPIC>` (free, no account or API key)
 - `NTFY_TOPIC` is set as a secret or in `.dev.vars`; the topic name acts as the credential, so it must be unguessable and kept out of git
-- Sends a plain-text message with an ASCII `Title` header (HTTP headers can't carry emoji) and `Tags: slot_machine` for the 🎰 icon
+- Sends a plain-text message with an ASCII `Title` header (HTTP headers can't carry emoji), `Priority: high`, and `Tags: slot_machine` for the 🎰 icon
 - Gracefully handles missing configuration (skips notifications)
 
 **KV Storage**:
