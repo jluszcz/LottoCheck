@@ -21,7 +21,7 @@ npm run deploy
 
 ## Validation Commands
 
-These run in CI (`.github/workflows/test.yml`) and must all pass before a PR merges. Run them locally before committing (they are also wired into the pre-commit hooks in `.pre-commit-config.yaml`):
+These run in CI (`.github/workflows/ci.yml`) and must all pass before a PR merges. Run them locally before committing (they are also wired into the pre-commit hooks in `.pre-commit-config.yaml`):
 
 ```bash
 # Verify formatting (CI); use `npm run format` to auto-fix
@@ -33,6 +33,8 @@ npm run lint
 # Run the test suite
 npm test
 ```
+
+**Before committing any change, run these three commands and confirm they pass.** This includes files that don't look like application code — e.g. GitHub Actions workflow YAML under `.github/workflows/` is still covered by `npm run format:check` and must be formatted before it's committed. A commit that fails CI's `Test` or `Lint` step should not have been made in the first place.
 
 Formatting is Prettier (`.prettierrc.json`: tabs, single quotes, 120-char width); linting is ESLint flat config (`eslint.config.js`).
 
