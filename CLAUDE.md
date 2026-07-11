@@ -34,6 +34,8 @@ npm run lint
 npm test
 ```
 
+**Before committing any change, run these three commands and confirm they pass.** This includes files that don't look like application code — e.g. GitHub Actions workflow YAML under `.github/workflows/` is still covered by `npm run format:check` and must be formatted before it's committed. A commit that fails CI's `Lint, Format & Test` job should not have been made in the first place.
+
 Formatting is Prettier (`.prettierrc.json`: tabs, single quotes, 120-char width); linting is ESLint flat config (`eslint.config.js`).
 
 ## Architecture
