@@ -12,27 +12,5 @@ permissions:
   contents: read
 
 jobs:
-  build:
-    name: Test & Lint
-    runs-on: ubuntu-latest
-
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@v7
-
-      - name: Setup Node.js
-        uses: actions/setup-node@v6
-        with:
-          node-version: '22'
-          cache: 'npm'
-
-      - name: Install dependencies
-        run: npm ci
-
-      - name: Test
-        run: npm test
-
-      - name: Lint
-        run: |
-          npm run lint
-          npm run format:check
+  ci:
+    uses: jluszcz/github-utils/.github/workflows/node-ci.yml@v1

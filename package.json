@@ -5,6 +5,7 @@
 	"main": "src/index.js",
 	"type": "module",
 	"scripts": {
+		"build": "echo 'no build step'",
 		"dev": "wrangler dev",
 		"deploy": "wrangler deploy",
 		"test": "vitest run",
