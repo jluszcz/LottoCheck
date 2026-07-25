@@ -69,12 +69,14 @@ export async function getPreviousJackpot(kv, lotteryName) {
  * @param {KVNamespace} kv - CloudFlare KV namespace
  * @param {string} lotteryName - "Mega Millions" or "Powerball"
  * @param {number} jackpotAmount - Current jackpot amount in millions
- * @returns {Promise<void>}
+ * @returns {Promise<boolean>} True if the value was stored. A false result means
+ *   the next run will compare against a stale "previous" amount, so an alert that
+ *   was just sent can be sent again — callers should say so.
  */
 export async function storePreviousJackpot(kv, lotteryName, jackpotAmount) {
 	// Handle undefined KV (local dev, tests without KV binding)
 	if (!kv) {
-		return;
+		return false;
 	}
 
 	try {
@@ -85,9 +87,11 @@ export async function storePreviousJackpot(kv, lotteryName, jackpotAmount) {
 
 		await kv.put(lotteryName, JSON.stringify(data));
 		console.log(`Stored ${lotteryName} state: ${jackpotAmount}M (this becomes the "previous" amount next run)`);
+		return true;
 	} catch (error) {
 		// Log error but don't throw - storage failure shouldn't crash the worker
 		console.error(`Error storing jackpot for ${lotteryName}:`, error.message);
+		return false;
 	}
 }
 
@@ -284,6 +288,31 @@ async function notifyCheckFailure(env, current) {
 }
 
 /**
+ * Record the current amount as the next run's "previous", saying so when it fails.
+ *
+ * A failed write after a notification was already sent is the one remaining path
+ * that can duplicate an alert: the next run re-reads the older, lower amount and
+ * sees the same crossing again. It is not worth failing the run over, but it
+ * should never be silent.
+ * @param {object} env - Environment variables
+ * @param {LotteryResult} current - Current lottery result
+ * @param {{notified: boolean}} context - Whether an alert was just sent
+ * @returns {Promise<void>}
+ */
+async function storeCurrentAmount(env, current, { notified }) {
+	const stored = await storePreviousJackpot(env.LOTTERY_STATE, current.lottery, current.jackpotAmount);
+	if (stored) {
+		return;
+	}
+
+	console.error(
+		notified
+			? `${current.lottery}: alert sent but state was not stored — the next run will compare against the old amount and may re-send it`
+			: `${current.lottery}: state was not stored — the next run will compare against the old amount`,
+	);
+}
+
+/**
  * Process one lottery: detect a threshold crossing, notify, and update stored state.
  * The KV update is skipped when the fetch failed (keeps the last good amount so a
  * transient error can't trigger a duplicate alert later), when the KV read failed
@@ -321,7 +350,7 @@ async function processLottery(env, current, thresholdMillions) {
 		console.log(
 			`${current.lottery}: no notification — ${reason} (previous ${previousAmount}M, current ${current.jackpotAmount}M, threshold ${thresholdMillions}M)`,
 		);
-		await storePreviousJackpot(env.LOTTERY_STATE, current.lottery, current.jackpotAmount);
+		await storeCurrentAmount(env, current, { notified: false });
 		return;
 	}
 
@@ -354,7 +383,7 @@ async function processLottery(env, current, thresholdMillions) {
 		);
 	}
 
-	await storePreviousJackpot(env.LOTTERY_STATE, current.lottery, current.jackpotAmount);
+	await storeCurrentAmount(env, current, { notified: true });
 }
 
 export default {
@@ -365,6 +394,17 @@ export default {
 	 * @returns {Promise<Response>} JSON response with lottery data and threshold information
 	 */
 	async fetch(request, env) {
+		// Every path and method used to return the full payload, which makes this
+		// an unmetered proxy to two upstream sites if the worker is ever exposed
+		// without Cloudflare Access in front of it.
+		const url = new URL(request.url);
+		if (request.method !== 'GET' || url.pathname !== '/') {
+			return new Response(JSON.stringify({ error: 'Not found' }, null, 2), {
+				status: 404,
+				headers: { 'Content-Type': 'application/json' },
+			});
+		}
+
 		try {
 			// Check both lotteries in parallel
 			const [megaMillions, powerball] = await Promise.all([checkMegaMillions(), checkPowerball()]);
@@ -457,8 +497,8 @@ function checkThresholds(megaMillions, powerball, thresholdMillions) {
 
 	// Build list of lotteries that exceed threshold
 	const exceedingLotteries = [];
-	if (megaExceeds) exceedingLotteries.push('Mega Millions');
-	if (powerballExceeds) exceedingLotteries.push('Powerball');
+	if (megaExceeds) exceedingLotteries.push(megaMillions.lottery);
+	if (powerballExceeds) exceedingLotteries.push(powerball.lottery);
 
 	return {
 		megaMillions: {
