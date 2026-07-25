@@ -17,7 +17,15 @@ npm run dev
 
 # Deploy to CloudFlare
 npm run deploy
+
+# Re-run tests on change
+npm run test:watch
 ```
+
+Node 22 is what CI runs (the README says 20+; there is no `engines` field pinning it).
+
+**Coverage does not work here.** `npx vitest run --coverage` fails with `ERR_METHOD_NOT_IMPLEMENTED` — workerd has no
+`node:inspector` — so `@vitest/coverage-v8` has been removed. Don't reach for `--coverage`.
 
 ## Validation Commands
 
@@ -78,7 +86,8 @@ The worker exports an object with two handlers:
 2. Retrieves previous amounts: `getPreviousJackpot()` from KV — returns `null` when the read fails (distinct from `0` = no state yet), in which case the lottery is skipped for the run so an unknown previous amount isn't treated as a fresh crossing. A corrupt stored value (unparseable JSON or non-numeric amount) is instead treated as `0`: unlike a transient read failure it would never self-heal if skipped, so the next successful run overwrites it at the cost of at most one duplicate alert
 3. Detects crossings: `detectThresholdCrossing()` for each lottery
 4. Sends notifications: `sendNtfyNotification()` posts to `https://ntfy.sh/<NTFY_TOPIC>` if threshold crossed
-5. Stores current state: `storePreviousJackpot()` to KV — skipped when the fetch errored (a transient failure must not overwrite good state with 0 and cause a duplicate alert later), when the KV read failed, or when the notification failed (so the crossing retries on the next run)
+5. Stores current state: `storePreviousJackpot()` to KV — skipped when the fetch errored (a transient failure must not overwrite good state with 0 and cause a duplicate alert later), when the KV read failed, or when the notification failed (so the crossing retries on the next run). It returns a boolean; `storeCurrentAmount()` logs when a write fails, because a failed write _after_ a notification is the one remaining path that can duplicate an alert
+6. Alerts on failure: when a check errors, `notifyCheckFailure()` sends a `Priority: low` ntfy message, at most once per lottery per day (de-duplicated via a `<lottery>:lastErrorAlert` KV key holding the date). A broken scraper otherwise preserves state correctly and logs the reason, but surfaces nothing
 
 Data fetching functions return a standardized object:
 
@@ -109,6 +118,20 @@ Data fetching functions return a standardized object:
 - Less reliable but no API currently available
 
 Both functions normalize amounts to millions for threshold comparisons and handle errors gracefully by returning error objects instead of throwing.
+
+**Every parsed amount goes through `validateJackpotAmount()`.** A 200 response with a null, missing, or non-numeric jackpot otherwise produces `0`/`NaN` with no `error` property, which `processLottery()` treats as good data and writes to KV — `NaN` stores as `null`, reads back as `0`, and the next real reading above threshold registers as a fresh crossing and re-alerts. Any new parsing path must validate the same way.
+
+## Test Conventions
+
+`checkMegaMillions()`, `checkPowerball()`, `checkThresholds()`, and `formatJackpotDisplay()` are deliberately **not**
+exported, so they can only be exercised through `worker.fetch` / `worker.scheduled`.
+
+Outbound calls are mocked by stubbing `globalThis.fetch` with a per-origin router (`src/index.test.js`); an
+unregistered origin throws, so every test declares exactly what it expects to call. The helpers are
+`mockMegaMillions` / `mockPowerball` / `mockLotteries` / `mockNtfy` / `createMockKV` / `createMockEnv`.
+
+**Always pass `createMockEnv()`, never the `env` imported from `cloudflare:test`** — that one resolves the real KV
+namespace binding from `wrangler.toml` and loads the developer's `.dev.vars`.
 
 ## Testing Locally
 
@@ -188,7 +211,7 @@ Any tracked file — `wrangler.toml`, `.dev.vars.example`, tests, docs, comments
 
 - Sent as an HTTP POST to `https://ntfy.sh/<NTFY_TOPIC>` (free, no account or API key)
 - `NTFY_TOPIC` is set as a secret or in `.dev.vars`; the topic name acts as the credential, so it must be unguessable and kept out of git
-- Sends a plain-text message with an ASCII `Title` header (HTTP headers can't carry emoji), `Priority: high`, and `Tags: slot_machine` for the 🎰 icon
+- Sends a plain-text message with an ASCII `Title` header (HTTP headers can't carry emoji), `Tags: slot_machine` for the 🎰 icon, and `Priority: high` for crossings / `Priority: low` for failure alerts
 - Gracefully handles missing configuration (skips notifications)
 
 **KV Storage**:
@@ -203,10 +226,3 @@ Any tracked file — `wrangler.toml`, `.dev.vars.example`, tests, docs, comments
 - Only notifies when jackpot transitions from below to above threshold
 - Prevents duplicate notifications when jackpot stays above threshold
 - Implemented via `detectThresholdCrossing()` function
-
-## Future Enhancement Ideas
-
-- Add SMS notifications (via Twilio or similar)
-- Add webhook support for custom integrations
-- Support for additional lotteries beyond Mega Millions and Powerball
-- Web dashboard for viewing historical jackpot trends

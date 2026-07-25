@@ -37,7 +37,9 @@ The worker runs daily and:
 
 5. **Stores Current Jackpots** in KV for the next run. Storage is skipped for a lottery when its data fetch failed (so a transient error can't trigger a duplicate alert later), when reading its previous state from KV failed (an unknown previous amount must not be treated as a fresh crossing), or when its notification failed to send (so the crossing is retried on the next run)
 
-6. **Logs Results** to CloudFlare's dashboard for monitoring
+6. **Alerts on Failure** — if a lottery check fails (upstream outage, or the Powerball markup changing under the scraper), a low-priority ntfy message says so, at most once per lottery per day. A broken check preserves state correctly and logs the reason, but "the page changed months ago and I never noticed" is the most likely way this app quietly stops doing its job
+
+7. **Logs Results** to CloudFlare's dashboard for monitoring
 
 ## Setup
 
@@ -183,11 +185,12 @@ Checks run automatically on:
 - Every push to `main` branch
 - Every pull request to `main` branch
 
-The GitHub Actions workflow runs three steps that must all pass before PRs can be merged:
+`.github/workflows/ci.yml` is a thin caller of `jluszcz/github-utils/.github/workflows/node-ci.yml@v1`, so the
+steps live in that shared workflow. On Node 22 it runs three named steps that must all pass before a PR can merge:
 
-1. **Formatting** (`npm run format:check`) — Prettier verifies code style
-2. **Linting** (`npm run lint`) — ESLint checks for code-quality issues
-3. **Tests** (`npm test`) — Vitest runs the full test suite
+1. **Build** (`npm ci`, then `npm run build`) — the build is a no-op here, but CI invokes it
+2. **Tests** (`npm test`) — Vitest runs the full test suite
+3. **Lint** (`npm run lint`, then `npm run format:check`) — ESLint, then Prettier style verification
 
 ### Test Coverage
 
@@ -234,13 +237,14 @@ The threshold is configured in `wrangler.toml`:
 
 ```toml
 [vars]
-JACKPOT_THRESHOLD_MILLIONS = "1500"  # $1.5 billion
+JACKPOT_THRESHOLD_MILLIONS = "1250"  # $1.25 billion — the value this repo ships
 ```
 
 Adjust this value to set your preferred notification threshold:
 
 - `"1000"` = $1 billion
-- `"1500"` = $1.5 billion (default)
+- `"1250"` = $1.25 billion (the shipped value)
+- `"1500"` = $1.5 billion (the code default, used when the var is unset or invalid)
 - `"2000"` = $2 billion
 
 The threshold is validated on startup and falls back to the default if invalid.
@@ -248,6 +252,9 @@ The threshold is validated on startup and falls back to the default if invalid.
 ### Push Notifications (ntfy)
 
 Notifications are sent as push messages via [ntfy](https://ntfy.sh) when a jackpot crosses your threshold. ntfy.sh is free, requires no account or API key, and delivers to the open-source [Android](https://play.google.com/store/apps/details?id=io.heckel.ntfy) and [iOS](https://apps.apple.com/us/app/ntfy/id1625396347) apps.
+
+Failed checks also notify, at `Priority: low` and no more than once per lottery per day (de-duplicated through a
+`<lottery>:lastErrorAlert` KV key). Jackpot-crossing alerts are `Priority: high`.
 
 **One-time setup**:
 

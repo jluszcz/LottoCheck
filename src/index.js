@@ -69,12 +69,14 @@ export async function getPreviousJackpot(kv, lotteryName) {
  * @param {KVNamespace} kv - CloudFlare KV namespace
  * @param {string} lotteryName - "Mega Millions" or "Powerball"
  * @param {number} jackpotAmount - Current jackpot amount in millions
- * @returns {Promise<void>}
+ * @returns {Promise<boolean>} True if the value was stored. A false result means
+ *   the next run will compare against a stale "previous" amount, so an alert that
+ *   was just sent can be sent again — callers should say so.
  */
 export async function storePreviousJackpot(kv, lotteryName, jackpotAmount) {
 	// Handle undefined KV (local dev, tests without KV binding)
 	if (!kv) {
-		return;
+		return false;
 	}
 
 	try {
@@ -85,9 +87,11 @@ export async function storePreviousJackpot(kv, lotteryName, jackpotAmount) {
 
 		await kv.put(lotteryName, JSON.stringify(data));
 		console.log(`Stored ${lotteryName} state: ${jackpotAmount}M (this becomes the "previous" amount next run)`);
+		return true;
 	} catch (error) {
 		// Log error but don't throw - storage failure shouldn't crash the worker
 		console.error(`Error storing jackpot for ${lotteryName}:`, error.message);
+		return false;
 	}
 }
 
@@ -154,15 +158,17 @@ export function isNtfyConfigured(env) {
  * @param {string} title - Notification title (ASCII only — HTTP header values
  *   cannot carry emoji; the Tags header adds the 🎰 icon instead)
  * @param {string} message - Notification body
+ * @param {string} [priority='high'] - ntfy priority ('low' for failure alerts,
+ *   which are informational and should not buzz the phone)
  * @returns {Promise<{success: boolean, error?: string}>} Send result
  */
-export async function sendNtfyNotification(topic, title, message) {
+export async function sendNtfyNotification(topic, title, message, priority = 'high') {
 	try {
 		const response = await fetch(`https://ntfy.sh/${encodeURIComponent(topic)}`, {
 			method: 'POST',
 			headers: {
 				Title: title,
-				Priority: 'high',
+				Priority: priority,
 				Tags: 'slot_machine',
 			},
 			body: message,
@@ -221,6 +227,91 @@ export async function sendNtfyNotification(topic, title, message) {
  * @property {ThresholdInfo} threshold - Threshold metadata
  */
 
+/** KV key suffix holding the date a failure alert was last sent for a lottery. */
+const FAILURE_ALERT_KEY_SUFFIX = ':lastErrorAlert';
+
+/**
+ * Tell the user a lottery check is failing, at most once per day per lottery.
+ *
+ * A broken scraper preserves state correctly and logs the reason, but nothing
+ * surfaces it — and "the Powerball markup changed months ago and I never
+ * noticed" is the most likely way this app quietly stops doing its job. Sent at
+ * low priority so it informs without buzzing, and de-duplicated through KV so a
+ * long outage doesn't turn into a stream of identical alerts within a day.
+ * @param {object} env - Environment variables
+ * @param {LotteryResult} current - The failed lottery result
+ * @returns {Promise<void>}
+ */
+async function notifyCheckFailure(env, current) {
+	if (!isNtfyConfigured(env)) {
+		return;
+	}
+
+	const kv = env.LOTTERY_STATE;
+	const alertKey = `${current.lottery}${FAILURE_ALERT_KEY_SUFFIX}`;
+	const today = new Date().toISOString().slice(0, 10);
+
+	if (kv) {
+		try {
+			if ((await kv.get(alertKey)) === today) {
+				console.log(`${current.lottery}: failure alert already sent today, not repeating it`);
+				return;
+			}
+		} catch (error) {
+			// Prefer a possible duplicate alert over a silently missing one.
+			console.error(`Error reading last failure alert for ${current.lottery}:`, error.message);
+		}
+	}
+
+	const message = [
+		`${current.lottery} could not be checked.`,
+		'',
+		current.error,
+		'',
+		'Jackpot alerts for this lottery are paused until a check succeeds.',
+	].join('\n');
+
+	const result = await sendNtfyNotification(env.NTFY_TOPIC, `${current.lottery} check failed`, message, 'low');
+
+	if (!result.success) {
+		console.error(`Could not send the failure alert for ${current.lottery}:`, result.error);
+		return;
+	}
+
+	if (kv) {
+		try {
+			await kv.put(alertKey, today);
+		} catch (error) {
+			console.error(`Error recording the failure alert for ${current.lottery}:`, error.message);
+		}
+	}
+}
+
+/**
+ * Record the current amount as the next run's "previous", saying so when it fails.
+ *
+ * A failed write after a notification was already sent is the one remaining path
+ * that can duplicate an alert: the next run re-reads the older, lower amount and
+ * sees the same crossing again. It is not worth failing the run over, but it
+ * should never be silent.
+ * @param {object} env - Environment variables
+ * @param {LotteryResult} current - Current lottery result
+ * @param {{notified: boolean}} context - Whether an alert was just sent
+ * @returns {Promise<void>}
+ */
+async function storeCurrentAmount(env, current, { notified }) {
+	const stored = await storePreviousJackpot(env.LOTTERY_STATE, current.lottery, current.jackpotAmount);
+	if (stored) {
+		return;
+	}
+
+	console.error(
+		notified
+			? `${current.lottery}: alert sent but state was not stored — the next run will compare against the old amount and may re-send it`
+			: `${current.lottery}: state was not stored — the next run will compare against the old amount`,
+	);
+}
+
 /**
  * Process one lottery: detect a threshold crossing, notify, and update stored state.
  * The KV update is skipped when the fetch failed (keeps the last good amount so a
@@ -235,6 +326,7 @@ export async function sendNtfyNotification(topic, title, message) {
 async function processLottery(env, current, thresholdMillions) {
 	if (current.error) {
 		console.error(`${current.lottery}: fetch failed, keeping previous state:`, current.error);
+		await notifyCheckFailure(env, current);
 		return;
 	}
 
@@ -258,7 +350,7 @@ async function processLottery(env, current, thresholdMillions) {
 		console.log(
 			`${current.lottery}: no notification — ${reason} (previous ${previousAmount}M, current ${current.jackpotAmount}M, threshold ${thresholdMillions}M)`,
 		);
-		await storePreviousJackpot(env.LOTTERY_STATE, current.lottery, current.jackpotAmount);
+		await storeCurrentAmount(env, current, { notified: false });
 		return;
 	}
 
@@ -291,7 +383,7 @@ async function processLottery(env, current, thresholdMillions) {
 		);
 	}
 
-	await storePreviousJackpot(env.LOTTERY_STATE, current.lottery, current.jackpotAmount);
+	await storeCurrentAmount(env, current, { notified: true });
 }
 
 export default {
@@ -302,6 +394,17 @@ export default {
 	 * @returns {Promise<Response>} JSON response with lottery data and threshold information
 	 */
 	async fetch(request, env) {
+		// Every path and method used to return the full payload, which makes this
+		// an unmetered proxy to two upstream sites if the worker is ever exposed
+		// without Cloudflare Access in front of it.
+		const url = new URL(request.url);
+		if (request.method !== 'GET' || url.pathname !== '/') {
+			return new Response(JSON.stringify({ error: 'Not found' }, null, 2), {
+				status: 404,
+				headers: { 'Content-Type': 'application/json' },
+			});
+		}
+
 		try {
 			// Check both lotteries in parallel
 			const [megaMillions, powerball] = await Promise.all([checkMegaMillions(), checkPowerball()]);
@@ -394,8 +497,8 @@ function checkThresholds(megaMillions, powerball, thresholdMillions) {
 
 	// Build list of lotteries that exceed threshold
 	const exceedingLotteries = [];
-	if (megaExceeds) exceedingLotteries.push('Mega Millions');
-	if (powerballExceeds) exceedingLotteries.push('Powerball');
+	if (megaExceeds) exceedingLotteries.push(megaMillions.lottery);
+	if (powerballExceeds) exceedingLotteries.push(powerball.lottery);
 
 	return {
 		megaMillions: {
@@ -413,6 +516,27 @@ function checkThresholds(megaMillions, powerball, thresholdMillions) {
 			exceedingLotteries,
 		},
 	};
+}
+
+/**
+ * Reject a jackpot value that parsed but cannot be real.
+ *
+ * A 200 response with a null, missing, or non-numeric amount otherwise yields
+ * `0`/`NaN` with no `error` property, so processLottery() treats it as good data
+ * and writes it to KV. `NaN` stores as `null` and reads back as `0`, so the next
+ * real reading above threshold looks like a fresh crossing and re-alerts —
+ * defeating every other "don't overwrite good state" guard in this file.
+ * @param {string} lottery - Lottery name, for the error message
+ * @param {number} amountInMillions - Parsed amount in millions
+ * @param {*} raw - The raw value, included in the error message
+ * @returns {number} The validated amount
+ * @throws {Error} If the amount is not a positive finite number
+ */
+function validateJackpotAmount(lottery, amountInMillions, raw) {
+	if (!Number.isFinite(amountInMillions) || amountInMillions <= 0) {
+		throw new Error(`${lottery} returned an invalid jackpot: ${raw}`);
+	}
+	return amountInMillions;
 }
 
 /**
@@ -441,9 +565,8 @@ async function checkMegaMillions() {
 		const nextDrawingDate = new Date(data.NextDrawingDate);
 
 		// Convert to millions and format
-		const jackpotInMillions = nextPrizePool / 1000000;
-		const jackpot = formatJackpotDisplay(jackpotInMillions);
-		const jackpotAmount = jackpotInMillions;
+		const jackpotAmount = validateJackpotAmount('Mega Millions', nextPrizePool / 1000000, nextPrizePool);
+		const jackpot = formatJackpotDisplay(jackpotAmount);
 
 		// Format drawing date
 		const nextDrawing = nextDrawingDate.toLocaleDateString('en-US', {
@@ -505,7 +628,7 @@ async function checkPowerball() {
 			if (match) {
 				const amount = parseFloat(match[1].replace(/,/g, ''));
 				const unit = match[2].toLowerCase();
-				jackpotAmount = unit === 'billion' ? amount * 1000 : amount;
+				jackpotAmount = validateJackpotAmount('Powerball', unit === 'billion' ? amount * 1000 : amount, match[0]);
 				jackpot = `$${match[1]} ${match[2]}`;
 				break;
 			}
