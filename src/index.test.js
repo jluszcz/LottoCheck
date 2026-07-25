@@ -793,6 +793,61 @@ describe('Mega Millions API', () => {
 		expect(data.megaMillions.jackpot).toBe('Error');
 		expect(data.megaMillions.error).toBeDefined();
 	});
+
+	// A 200 with a well-formed envelope but a bad jackpot is the dangerous case:
+	// without an error property, processLottery treats it as good data and writes
+	// it to KV, which resets the crossing state and duplicates the next alert.
+	it.each([
+		['a null jackpot', JSON.stringify({ d: JSON.stringify({ Jackpot: { NextPrizePool: null } }) })],
+		['a missing jackpot field', JSON.stringify({ d: JSON.stringify({ Jackpot: {} }) })],
+		['a non-numeric jackpot', JSON.stringify({ d: JSON.stringify({ Jackpot: { NextPrizePool: 'lots' } }) })],
+		['a zero jackpot', JSON.stringify({ d: JSON.stringify({ Jackpot: { NextPrizePool: 0 } }) })],
+	])('reports an error for a Mega Millions response with %s', async (_label, body) => {
+		mockMegaMillions(body);
+		mockPowerball(powerballHtml(fixtures.powerball.billion));
+
+		const request = new Request('http://localhost');
+		const ctx = createExecutionContext();
+		const response = await worker.fetch(request, createMockEnv(), ctx);
+		const data = await response.json();
+
+		expect(data.megaMillions.error).toBeDefined();
+		expect(data.megaMillions.jackpot).toBe('Error');
+		expect(data.megaMillions.jackpotAmount).toBe(0);
+		expect(data.megaMillions.exceedsThreshold).toBe(false);
+	});
+
+	it.each([
+		['an unparseable amount', '$, Million'],
+		['a zero jackpot', '$0 Million'],
+	])('reports an error for a Powerball page with %s', async (_label, jackpotText) => {
+		mockMegaMillions(megaMillionsBody(fixtures.megaMillions.billion.amount));
+		mockPowerball(powerballHtml(jackpotText));
+
+		const request = new Request('http://localhost');
+		const ctx = createExecutionContext();
+		const response = await worker.fetch(request, createMockEnv(), ctx);
+		const data = await response.json();
+
+		expect(data.powerball.error).toBeDefined();
+		expect(data.powerball.jackpotAmount).toBe(0);
+		expect(data.powerball.exceedsThreshold).toBe(false);
+	});
+
+	it('does not store state for a lottery whose jackpot failed validation', async () => {
+		mockMegaMillions(JSON.stringify({ d: JSON.stringify({ Jackpot: { NextPrizePool: null } }) }));
+		mockPowerball(powerballHtml(fixtures.powerball.billion));
+		mockNtfy();
+
+		const kv = createMockKV({ 'Mega Millions': { jackpotAmount: 100 } });
+		const env = createMockEnv({ LOTTERY_STATE: kv, NTFY_TOPIC: 'test-topic' });
+		const ctx = createExecutionContext();
+
+		await worker.scheduled(createScheduledController(), env, ctx);
+		await waitOnExecutionContext(ctx);
+
+		expect(kv.put).not.toHaveBeenCalledWith('Mega Millions', expect.anything());
+	});
 });
 
 describe('Powerball scraping', () => {
@@ -1220,5 +1275,88 @@ describe('isNtfyConfigured', () => {
 
 	it('returns false when env is null', () => {
 		expect(isNtfyConfigured(null)).toBe(false);
+	});
+});
+
+describe('failure alerting', () => {
+	// The app's whole purpose is not missing a large jackpot, so "the Powerball
+	// markup changed three months ago and nobody noticed" is the most likely way
+	// it quietly stops working. A failed check has to be visible somewhere other
+	// than the logs.
+	it('sends a low-priority alert when a lottery check fails', async () => {
+		mockMegaMillions(megaMillionsBody(fixtures.megaMillions.halfBillion.amount));
+		mockPowerball('<html>redesigned page with no jackpot</html>');
+		const ntfy = mockNtfy();
+
+		const env = createMockEnv({ NTFY_TOPIC: 'test-topic' });
+		const ctx = createExecutionContext();
+
+		await worker.scheduled(createScheduledController(), env, ctx);
+		await waitOnExecutionContext(ctx);
+
+		expect(ntfy.requests).toHaveLength(1);
+		expect(ntfy.requests[0].init.headers.Title).toContain('Powerball');
+		expect(ntfy.requests[0].init.headers.Priority).toBe('low');
+		expect(ntfy.requests[0].init.body).toContain('Failed to parse jackpot');
+	});
+
+	it('sends at most one failure alert per lottery per day', async () => {
+		const ntfy = mockNtfy();
+		const env = createMockEnv({ NTFY_TOPIC: 'test-topic' });
+
+		for (let run = 0; run < 3; run++) {
+			mockMegaMillions(megaMillionsBody(fixtures.megaMillions.halfBillion.amount));
+			mockPowerball('<html>redesigned page with no jackpot</html>');
+			const ctx = createExecutionContext();
+			await worker.scheduled(createScheduledController(), env, ctx);
+			await waitOnExecutionContext(ctx);
+		}
+
+		expect(ntfy.requests).toHaveLength(1);
+	});
+
+	it('alerts separately for each failing lottery', async () => {
+		mockMegaMillions('not json at all');
+		mockPowerball('<html>redesigned page with no jackpot</html>');
+		const ntfy = mockNtfy();
+
+		const env = createMockEnv({ NTFY_TOPIC: 'test-topic' });
+		const ctx = createExecutionContext();
+
+		await worker.scheduled(createScheduledController(), env, ctx);
+		await waitOnExecutionContext(ctx);
+
+		const titles = ntfy.requests.map((r) => r.init.headers.Title);
+		expect(titles).toHaveLength(2);
+		expect(titles.some((t) => t.includes('Mega Millions'))).toBe(true);
+		expect(titles.some((t) => t.includes('Powerball'))).toBe(true);
+	});
+
+	it('does not touch the lottery state when a check fails', async () => {
+		mockMegaMillions(megaMillionsBody(fixtures.megaMillions.halfBillion.amount));
+		mockPowerball('<html>redesigned page with no jackpot</html>');
+		mockNtfy();
+
+		const kv = createMockKV({ Powerball: { jackpotAmount: 900 } });
+		const env = createMockEnv({ LOTTERY_STATE: kv, NTFY_TOPIC: 'test-topic' });
+		const ctx = createExecutionContext();
+
+		await worker.scheduled(createScheduledController(), env, ctx);
+		await waitOnExecutionContext(ctx);
+
+		expect(kv.put).not.toHaveBeenCalledWith('Powerball', expect.anything());
+		expect(JSON.parse(kv._storage.get('Powerball')).jackpotAmount).toBe(900);
+	});
+
+	it('does not attempt an alert when ntfy is not configured', async () => {
+		mockMegaMillions(megaMillionsBody(fixtures.megaMillions.halfBillion.amount));
+		mockPowerball('<html>redesigned page with no jackpot</html>');
+		const ntfy = mockNtfy();
+
+		const ctx = createExecutionContext();
+		await worker.scheduled(createScheduledController(), createMockEnv(), ctx);
+		await waitOnExecutionContext(ctx);
+
+		expect(ntfy.requests).toHaveLength(0);
 	});
 });

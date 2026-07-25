@@ -1,7 +1,6 @@
 name = "lottocheck"
 main = "src/index.js"
 compatibility_date = "2026-03-17"
-compatibility_flags = ["nodejs_compat"]
 
 [vars]
 # Jackpot notification threshold (e.g. 1500 = $1.5 billion)

@@ -19,14 +19,11 @@
 		"picomatch": "^4.0.4"
 	},
 	"devDependencies": {
-		"@cloudflare/vitest-pool-workers": "^0.16.20",
-		"@cloudflare/workers-types": "^4.20260317.1",
+		"@cloudflare/vitest-pool-workers": "^0.18.8",
 		"@eslint/js": "^10.0.1",
-		"@vitest/coverage-v8": "^4.1.9",
 		"eslint": "^10.6.0",
 		"globals": "^17.7.0",
 		"prettier": "3.9.4",
-		"typescript": "^6.0.3",
 		"vitest": "^4.1.2",
 		"wrangler": "^4.77.0"
 	}
