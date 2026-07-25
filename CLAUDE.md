@@ -21,7 +21,12 @@ npm run deploy
 
 ## Validation Commands
 
-These run in CI (`.github/workflows/ci.yml`) and must all pass before a PR merges. Run them locally before committing (they are also wired into the pre-commit hooks in `.pre-commit-config.yaml`):
+`.github/workflows/ci.yml` is a thin caller of
+`jluszcz/github-utils/.github/workflows/node-ci.yml@v1` — the steps live in that shared workflow, not in this repo.
+On every push to `main` and every PR targeting `main`, it runs `npm ci`, `npm run build`, `npm test`, `npm run lint`,
+and `npm run format:check` on Node 22. All must pass before a PR merges.
+
+Run these locally before committing (they are also wired into the pre-commit hooks in `.pre-commit-config.yaml`):
 
 ```bash
 # Verify formatting (CI); use `npm run format` to auto-fix
@@ -32,6 +37,9 @@ npm run lint
 
 # Run the test suite
 npm test
+
+# Build — a no-op here, but CI invokes it, so keep it passing
+npm run build
 ```
 
 **Before committing any change, run these three commands and confirm they pass.** This includes files that don't look like application code — e.g. GitHub Actions workflow YAML under `.github/workflows/` is still covered by `npm run format:check` and must be formatted before it's committed. A commit that fails CI's `Test` or `Lint` step should not have been made in the first place.
