@@ -185,7 +185,7 @@ Checks run automatically on:
 - Every push to `main` branch
 - Every pull request to `main` branch
 
-`.github/workflows/ci.yml` is a thin caller of `jluszcz/github-utils/.github/workflows/node-ci.yml@v1`, so the
+`.github/workflows/ci.yml` is a thin caller of `jluszcz/github-utils/.github/workflows/node-ci.yml`, so the
 steps live in that shared workflow. On Node 22 it runs three named steps that must all pass before a PR can merge:
 
 1. **Build** (`npm ci`, then `npm run build`) — the build is a no-op here, but CI invokes it

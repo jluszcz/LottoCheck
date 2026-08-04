@@ -30,7 +30,7 @@ Node 22 is what CI runs (the README says 20+; there is no `engines` field pinnin
 ## Validation Commands
 
 `.github/workflows/ci.yml` is a thin caller of
-`jluszcz/github-utils/.github/workflows/node-ci.yml@v1` — the steps live in that shared workflow, not in this repo.
+`jluszcz/github-utils/.github/workflows/node-ci.yml` — the steps live in that shared workflow, not in this repo.
 On every push to `main` and every PR targeting `main`, it runs `npm ci`, `npm run build`, `npm test`, `npm run lint`,
 and `npm run format:check` on Node 22. All must pass before a PR merges.
 
