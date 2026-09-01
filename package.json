@@ -19,12 +19,12 @@
 		"picomatch": "^4.0.4"
 	},
 	"devDependencies": {
-		"@cloudflare/vitest-pool-workers": "^0.19.0",
+		"@cloudflare/vitest-pool-workers": "^0.22.0",
 		"@eslint/js": "^10.0.1",
-		"eslint": "^10.8.0",
-		"globals": "^17.8.0",
+		"eslint": "^10.9.1",
+		"globals": "^17.11.0",
 		"prettier": "3.9.6",
-		"vitest": "^4.1.10",
+		"vitest": "^4.1.11",
 		"wrangler": "^4.77.0"
 	}
 }
