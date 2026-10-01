@@ -8,6 +8,12 @@ updates:
       all-dependencies:
         patterns:
           - '*'
+    # @cloudflare/vitest-pool-workers pins vitest's major as a peer, so a
+    # vitest major bump breaks `npm ci` until the pool supports it. Move both
+    # together by hand.
+    ignore:
+      - dependency-name: 'vitest'
+        update-types: ['version-update:semver-major']
     assignees:
       - 'jluszcz'
   - package-ecosystem: 'github-actions'
