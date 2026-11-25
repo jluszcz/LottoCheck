@@ -14,11 +14,6 @@
 		"format": "prettier --write .",
 		"format:check": "prettier --check ."
 	},
-	"overrides": {
-		"undici": "^7.30.1",
-		"picomatch": "^4.0.4",
-		"sharp": "^0.35.5"
-	},
 	"devDependencies": {
 		"@cloudflare/vitest-plugin": "^1.4.12",
 		"@eslint/js": "^10.0.1",
